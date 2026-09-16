@@ -55,4 +55,4 @@ Found a bug or have an idea? [Open an issue](https://github.com/OWCramer/Brokeni
 
 If you enjoy the app, you can support development on [Ko-fi](https://ko-fi.com/owen1218).
 
-Made with ❤️ by [Owen Cramer](https://ocramer.com).
+Made with ❤️ by [Owen Cramer](https://github.com/OWCramer/).
