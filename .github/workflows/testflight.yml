@@ -139,13 +139,20 @@ jobs:
           CERT_PATH="$SIGNING_DIR/distribution.p12"
           printf '%s' "$P12" | base64 --decode > "$CERT_PATH"
           security import "$CERT_PATH" -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
-          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" > /dev/null
-          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
           rm -f "$CERT_PATH"
 
-          # Sanity check: one signing identity should be present (prints only the identity name)
-          security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep -c "Apple Distribution" > /dev/null \
-            || { echo "::error::No Apple Distribution identity found in the imported .p12"; exit 1; }
+          # An "identity" is a certificate paired with its private key. If the .p12 was
+          # exported without the private key, import succeeds but no identity exists and
+          # every later signing step fails, so check here with a clear message.
+          IDENTITIES="$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep -c "Apple Distribution" || true)"
+          if [[ "$IDENTITIES" -eq 0 ]]; then
+            echo "::error::The DISTRIBUTION_CERTIFICATE_P12 secret contains no Apple Distribution identity. The .p12 must include the private key: in Keychain Access, pick the 'My Certificates' category, expand the certificate, select both the certificate and its key, then Export. See .github/RELEASING.md."
+            exit 1
+          fi
+          echo "Imported $IDENTITIES Apple Distribution identity"
+
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" > /dev/null
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
 
           {
             echo "AUTH_KEY_PATH=$AUTH_KEY_PATH"

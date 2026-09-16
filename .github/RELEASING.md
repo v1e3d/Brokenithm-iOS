@@ -21,8 +21,21 @@ The monthly TestFlight job needs five repository secrets (Settings → Secrets a
 | `APP_STORE_CONNECT_KEY_ID` | Key ID of an App Store Connect API key (Users and Access → Integrations → App Store Connect API). The key needs the **App Manager** or **Admin** role so it can create provisioning profiles. |
 | `APP_STORE_CONNECT_ISSUER_ID` | Issuer ID shown on the same page. |
 | `APP_STORE_CONNECT_PRIVATE_KEY` | The full text of the downloaded `AuthKey_XXXXXXXXXX.p8` file (including the BEGIN/END lines). |
-| `DISTRIBUTION_CERTIFICATE_P12` | Your **Apple Distribution** certificate *and* private key exported from Keychain Access as a `.p12`, then base64-encoded (see the command below the table). |
+| `DISTRIBUTION_CERTIFICATE_P12` | Your **Apple Distribution** certificate *and* private key exported from Keychain Access as a `.p12`, then base64-encoded (see *Exporting the certificate* below). |
 | `DISTRIBUTION_CERTIFICATE_PASSWORD` | The password you chose when exporting the `.p12`. |
+
+### Exporting the certificate
+
+The `.p12` must contain the **private key**, not just the certificate. A certificate-only export imports without error but the workflow then fails with `SecItemCopyMatching: The specified item could not be found in the keychain`.
+
+1. Open **Keychain Access**, choose the **login** keychain and the **My Certificates** category.
+2. Find `Apple Distribution: <your name> (63LV533T6V)`. It must have a disclosure triangle with a private key underneath. If it has no triangle, the private key is not on this Mac: create a new certificate in Xcode (Settings → Accounts → your team → Manage Certificates → + → Apple Distribution) and use that one instead.
+3. Expand it, select **both** the certificate and the private key, right-click → **Export 2 items…**, choose the `.p12` format and set a password. That password is `DISTRIBUTION_CERTIFICATE_PASSWORD`.
+4. Before uploading, confirm the file contains a key (should print `1` or more):
+
+```bash
+openssl pkcs12 -in Certificates.p12 -nocerts -nodes | grep -c "PRIVATE KEY"
+```
 
 To base64-encode the certificate and copy it to the clipboard:
 
