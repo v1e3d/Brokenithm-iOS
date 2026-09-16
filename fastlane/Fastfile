@@ -1,0 +1,137 @@
+default_platform(:ios)
+
+require "base64"
+require "openssl"
+
+# The .p8 secret may be stored either as the raw PEM text or base64-encoded; accept both.
+def asc_key
+  content = ENV.fetch("ASC_PRIVATE_KEY")
+  app_store_connect_api_key(
+    key_id: ENV.fetch("ASC_KEY_ID"),
+    issuer_id: ENV.fetch("ASC_ISSUER_ID"),
+    key_content: content,
+    is_key_content_base64: !content.include?("BEGIN PRIVATE KEY")
+  )
+end
+
+# Uppercase hex serial with leading zeros stripped, so the keychain and the portal agree.
+def normalize_serial(hex)
+  hex.to_s.upcase.sub(/\A0+/, "")
+end
+
+# Serial numbers of every certificate in the CI keychain. Used to make sigh build the
+# profile around the certificate we can actually sign with, rather than whichever valid
+# distribution certificate the portal lists first (there can be several on a team).
+def keychain_cert_serials
+  keychain = ENV["KEYCHAIN_PATH"].to_s
+  return [] if keychain.empty?
+  pems = `security find-certificate -a -p "#{keychain}" 2>/dev/null`
+  pems.scan(/-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----/m).map do |pem|
+    normalize_serial(OpenSSL::X509::Certificate.new(pem).serial.to_s(16))
+  end
+end
+
+def portal_cert_serial(cert)
+  serial = cert.serial_number.to_s
+  if serial.empty?
+    der = Base64.decode64(cert.certificate_content.to_s)
+    serial = OpenSSL::X509::Certificate.new(der).serial.to_s(16)
+  end
+  normalize_serial(serial)
+end
+
+platform :ios do
+  desc "Point the app target at an App Store profile for manual signing"
+  desc "Run before archiving on CI. Writes the profile name to $GITHUB_OUTPUT as `profile`."
+  lane :provision do
+    # CI's keychain holds an Apple Distribution certificate and nothing else, so the archive
+    # has to be signed manually: automatic signing wants to create profiles through Xcode's
+    # cloud-signing path, which needs an Admin API key with cloud-managed-certificate access
+    # and otherwise fails with "Cloud signing permission error". sigh instead fetches (or
+    # creates) an App Store profile through the plain App Store Connect API using the same
+    # key already in secrets, so no provisioning profile needs keeping as a secret.
+    key = asc_key
+
+    # Pick the portal certificate that matches the one in the keychain.
+    cert_id = nil
+    serials = keychain_cert_serials
+    unless serials.empty?
+      Spaceship::ConnectAPI.token = Spaceship::ConnectAPI::Token.from(hash: key)
+      certs = Spaceship::ConnectAPI::Certificate.all(
+        filter: { certificateType: "IOS_DISTRIBUTION,DISTRIBUTION" }
+      )
+      match = certs.find { |c| serials.include?(portal_cert_serial(c)) }
+      if match
+        cert_id = match.id
+        UI.message("Keychain certificate matches portal certificate #{cert_id} (#{match.display_name})")
+      else
+        UI.important("No portal distribution certificate matches the keychain; letting sigh choose")
+      end
+    end
+
+    # readonly: false so a missing profile is created rather than failing the build.
+    # With cert_id set, sigh skips any existing profile that does not contain that
+    # certificate and creates one that does, so the archive can never end up with a
+    # profile the keychain cannot sign for. sigh installs what it downloads, which is
+    # what lets xcodebuild find it by name below.
+    sigh(
+      api_key: key,
+      platform: "ios",
+      readonly: false,
+      cert_id: cert_id
+    )
+
+    name = lane_context[SharedValues::SIGH_NAME]
+    UI.user_error!("sigh reported no profile name") if name.to_s.empty?
+    UI.important("Signing with profile: #{name}")
+
+    # Scoped to the app target and the Release configuration only.
+    update_code_signing_settings(
+      path: "brokenithm-swiftui.xcodeproj",
+      targets: ["brokenithm-swiftui"],
+      build_configurations: ["Release"],
+      use_automatic_signing: false,
+      team_id: ENV.fetch("TEAM_ID"),
+      code_sign_identity: "Apple Distribution",
+      profile_name: name
+    )
+
+    # The Export step names the same profile in ExportOptions.plist.
+    out = ENV["GITHUB_OUTPUT"]
+    File.write(out, "profile=#{name}\n", mode: "a") if out
+  end
+
+  desc "Upload a built IPA to TestFlight and hand it to the tester groups"
+  lane :beta do |options|
+    ipa = options[:ipa].to_s
+    UI.user_error!("ipa: is required") if ipa.empty?
+
+    notes_path = options[:notes].to_s
+    changelog = File.exist?(notes_path) ? File.read(notes_path).strip : ""
+    changelog = "Latest changes from main." if changelog.empty?
+
+    # External group names, passed in by the workflow from the TESTFLIGHT_GROUPS repo
+    # variable. Empty means internal testers only. The public TestFlight link belongs to
+    # an external group, so set the variable to that group's name for monthly builds to
+    # reach people who joined through the link.
+    groups = ENV["TESTFLIGHT_GROUPS"].to_s.split(",").map(&:strip).reject(&:empty?)
+    if groups.empty?
+      UI.important("No external groups — internal testers only")
+    else
+      UI.message("Distributing to external groups: #{groups.join(', ')}")
+    end
+
+    # skip_waiting_for_build_processing must stay false: a build cannot be distributed
+    # until Apple has processed it, so pilot has to wait it out (5-15 minutes).
+    # External groups need Beta App Review on each new version string.
+    pilot(
+      api_key: asc_key,
+      ipa: ipa,
+      changelog: changelog,
+      skip_waiting_for_build_processing: false,
+      distribute_external: groups.any?,
+      groups: groups.any? ? groups : nil,
+      notify_external_testers: true
+    )
+  end
+end

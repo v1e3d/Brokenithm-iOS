@@ -60,3 +60,9 @@ fastlane/report.xml
 fastlane/Preview.html
 fastlane/screenshots/**/*.png
 fastlane/test_output
+
+# Signing material and fastlane
+*.p8
+*.mobileprovision
+Gemfile.lock
+fastlane/test_output

@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>method</key>
+	<string>app-store-connect</string>
+	<key>teamID</key>
+	<string>63LV533T6V</string>
+	<!-- Manual, to match the archive. CI signs with an Apple Distribution certificate and
+	     holds no development one, so signing cannot be left to automatic resolution.
+	     The profile name below is a placeholder: the workflow's Export step overwrites it
+	     with the profile the `provision` lane actually fetched. -->
+	<key>signingStyle</key>
+	<string>manual</string>
+	<key>signingCertificate</key>
+	<string>Apple Distribution</string>
+	<key>provisioningProfiles</key>
+	<dict>
+		<key>com.ocramer.brokenithm-swiftui</key>
+		<string>PROFILE_NAME_SET_BY_CI</string>
+	</dict>
+	<key>destination</key>
+	<string>export</string>
+	<key>uploadSymbols</key>
+	<true/>
+	<!-- The workflow owns the version and build number. -->
+	<key>manageAppVersionAndBuildNumber</key>
+	<false/>
+</dict>
+</plist>
