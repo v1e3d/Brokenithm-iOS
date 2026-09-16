@@ -1,0 +1,100 @@
+name: Release IPA
+
+# Builds an UNSIGNED .ipa and attaches it to the GitHub release.
+# Users install it themselves with Sideloadly / AltStore / TrollStore, which
+# re-sign it with their own Apple ID. No certificates or secrets are used here.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SCHEME: brokenithm-swiftui
+  PROJECT: brokenithm-swiftui.xcodeproj
+
+jobs:
+  build:
+    name: Build unsigned IPA
+    runs-on: macos-26
+    permissions:
+      contents: write   # needed to upload the asset to the release
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Resolve version numbers
+        id: version
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          # Marketing version comes from the release tag ("v1.2.3" -> "1.2.3").
+          # On a manual run there is no tag, so fall back to the project value.
+          if [[ -n "${TAG:-}" ]]; then
+            VERSION="${TAG#v}"
+          else
+            VERSION="$(sed -nE 's/^[[:space:]]*MARKETING_VERSION = ([^;]+);/\1/p' "$PROJECT/project.pbxproj" | head -1)"
+          fi
+          BUILD_NUMBER="$(date -u +%Y%m%d%H%M)"
+          echo "version=$VERSION"      >> "$GITHUB_OUTPUT"
+          echo "build=$BUILD_NUMBER"   >> "$GITHUB_OUTPUT"
+          echo "Version $VERSION ($BUILD_NUMBER)"
+
+      - name: Build (Release, signing disabled)
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/DerivedData \
+            MARKETING_VERSION="${{ steps.version.outputs.version }}" \
+            CURRENT_PROJECT_VERSION="${{ steps.version.outputs.build }}" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS="" \
+            build | xcbeautify --renderer github-actions
+
+      - name: Package IPA
+        id: package
+        run: |
+          set -euo pipefail
+          APP="build/DerivedData/Build/Products/Release-iphoneos/$SCHEME.app"
+          test -d "$APP"
+          IPA="Brokenithm-SwiftUI-${{ steps.version.outputs.version }}-unsigned.ipa"
+          rm -rf build/Payload && mkdir -p build/Payload
+          cp -R "$APP" build/Payload/
+          (cd build && zip -qry "../$IPA" Payload)
+          shasum -a 256 "$IPA" | tee "$IPA.sha256"
+          echo "ipa=$IPA" >> "$GITHUB_OUTPUT"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.ipa }}
+          path: |
+            ${{ steps.package.outputs.ipa }}
+            ${{ steps.package.outputs.ipa }}.sha256
+          if-no-files-found: error
+
+      - name: Attach IPA to GitHub release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+          IPA: ${{ steps.package.outputs.ipa }}
+        run: gh release upload "$TAG" "$IPA" "$IPA.sha256" --clobber --repo "$GITHUB_REPOSITORY"
