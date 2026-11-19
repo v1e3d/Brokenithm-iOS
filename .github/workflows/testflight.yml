@@ -1,0 +1,328 @@
+name: TestFlight
+
+# Archives a signed build and uploads it to TestFlight, then hands it to the tester
+# groups. Runs on the 1st of every month, or on demand from the Actions tab.
+#
+# Signing follows the same shape as the AzuraCast Radio pipeline: the archive is signed
+# MANUALLY with an Apple Distribution certificate from secrets, and the App Store
+# provisioning profile is fetched (or created) by fastlane's `provision` lane through
+# the App Store Connect API. That avoids Xcode's cloud-signing path, which needs an
+# Admin API key and otherwise fails with "Cloud signing permission error".
+#
+# Required repository secrets (Settings -> Secrets and variables -> Actions):
+#   APP_STORE_CONNECT_KEY_ID       App Store Connect API key ID
+#   APP_STORE_CONNECT_ISSUER_ID    App Store Connect API issuer ID (UUID)
+#   APP_STORE_CONNECT_PRIVATE_KEY  The AuthKey_XXXX.p8 file: raw PEM text OR base64, both work
+#   BUILD_CERTIFICATE_BASE64       Apple Distribution certificate + private key, base64 .p12
+#                                  (DISTRIBUTION_CERTIFICATE_P12 is accepted as an alias)
+#   P12_PASSWORD                   Password of that .p12
+#                                  (DISTRIBUTION_CERTIFICATE_PASSWORD is accepted as an alias)
+# Optional:
+#   KEYCHAIN_PASSWORD              Password for the throwaway keychain; random if unset
+# Optional repository variable:
+#   TESTFLIGHT_GROUPS              Comma-separated external tester group names. The public
+#                                  TestFlight link is an external group; set this so monthly
+#                                  builds reach it. Unset = internal testers only.
+#
+# Security notes for this public repo:
+#   * Secrets are never available to workflows triggered from forks; this workflow only
+#     runs on schedule or manual dispatch from this repo.
+#   * Secrets are only referenced from `env:` blocks and are masked in logs.
+#   * Signing material lives in a throwaway keychain that is deleted in an `always()`
+#     step, even if the build fails.
+
+on:
+  schedule:
+    - cron: '0 14 1 * *'   # 14:00 UTC on the 1st of each month
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Upload even if there were no commits in the last month'
+        type: boolean
+        default: false
+      external:
+        description: 'Also distribute to external groups (Beta App Review applies)'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+# Never cancel a build in flight: concurrent runs would race on build numbers.
+concurrency:
+  group: testflight
+  cancel-in-progress: false
+
+env:
+  SCHEME: brokenithm-swiftui
+  PROJECT: brokenithm-swiftui.xcodeproj
+  BUNDLE_ID: com.ocramer.brokenithm-swiftui
+  TEAM_ID: 63LV533T6V   # already public in project.pbxproj; not a secret
+
+jobs:
+  upload:
+    name: Archive and upload to TestFlight
+    # macos-26 with latest-stable Xcode is the known-good shipping configuration. Apple
+    # rejects App Store Connect uploads built with a BETA Xcode during processing, so do
+    # not switch this to a beta-only image even if it matches the local toolchain.
+    runs-on: macos-26
+    timeout-minutes: 60
+    # Never run this job in forks (they have no secrets anyway, but fail fast).
+    if: github.repository == 'OWCramer/Brokenithm-SwiftUI'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0   # full history so we can read tags and commit dates
+
+      - name: Decide whether a new build is needed
+        id: gate
+        env:
+          FORCE: ${{ inputs.force }}
+        run: |
+          set -euo pipefail
+          LAST_COMMIT="$(git log -1 --format=%ct HEAD)"
+          CUTOFF="$(( $(date -u +%s) - 32*24*3600 ))"
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            echo "Manual run."; echo "run=true" >> "$GITHUB_OUTPUT"
+          elif (( LAST_COMMIT >= CUTOFF )); then
+            echo "Commits found in the last month."; echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No commits in the last 32 days; skipping TestFlight upload."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check secrets are configured
+        if: steps.gate.outputs.run == 'true'
+        env:
+          KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+          P12: ${{ secrets.BUILD_CERTIFICATE_BASE64 || secrets.DISTRIBUTION_CERTIFICATE_P12 }}
+          P12_PASSWORD: ${{ secrets.P12_PASSWORD || secrets.DISTRIBUTION_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in KEY_ID ISSUER_ID PRIVATE_KEY P12 P12_PASSWORD; do
+            if [[ -z "${!name:-}" ]]; then echo "::error::Secret for $name is not set"; missing=1; fi
+          done
+          exit $missing
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        if: steps.gate.outputs.run == 'true'
+        with:
+          xcode-version: latest-stable
+
+      - name: Record the SDK this build was made with
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          xcodebuild -version
+          echo "iOS SDK: $(xcodebuild -showsdks | awk '/iphoneos/{print $NF}' | tail -1)"
+
+      - uses: ruby/setup-ruby@v1
+        if: steps.gate.outputs.run == 'true'
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+
+      - name: Ensure xcbeautify
+        if: steps.gate.outputs.run == 'true'
+        run: command -v xcbeautify || brew install xcbeautify
+
+      - name: Resolve version and build number
+        if: steps.gate.outputs.run == 'true'
+        id: v
+        run: |
+          set -euo pipefail
+          # Marketing version: latest "vX.Y.Z" tag if one exists, else the project value.
+          TAG="$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || true)"
+          if [[ -n "$TAG" ]]; then
+            VERSION="${TAG#v}"
+          else
+            VERSION="$(sed -nE 's/^[[:space:]]*MARKETING_VERSION = ([^;]+);/\1/p' "$PROJECT/project.pbxproj" | head -1)"
+          fi
+          # Build number must strictly increase per version on TestFlight; a UTC
+          # timestamp guarantees that without any stored state and never collides
+          # with a build uploaded by hand from Xcode.
+          BUILD="$(date -u +%Y%m%d%H%M)"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "build=$BUILD"     >> "$GITHUB_OUTPUT"
+          echo "Shipping $VERSION ($BUILD)"
+
+      # Certificates live in a throwaway keychain scoped to this runner, not the login
+      # keychain, so nothing leaks between steps or jobs.
+      - name: Import signing certificate
+        if: steps.gate.outputs.run == 'true'
+        env:
+          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 || secrets.DISTRIBUTION_CERTIFICATE_P12 }}
+          P12_PASSWORD: ${{ secrets.P12_PASSWORD || secrets.DISTRIBUTION_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          umask 077
+          CERT_PATH="$RUNNER_TEMP/certificate.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+          : "${KEYCHAIN_PASSWORD:=$(openssl rand -base64 32)}"
+
+          printf '%s' "$BUILD_CERTIFICATE_BASE64" | base64 --decode > "$CERT_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          rm -f "$CERT_PATH"
+
+          # An identity is a certificate paired with its private key. A .p12 exported
+          # without the key imports fine but signs nothing, so check with a clear message.
+          IDENTITIES="$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep -c "Apple Distribution" || true)"
+          if [[ "$IDENTITIES" -eq 0 ]]; then
+            echo "::error::The certificate secret contains no Apple Distribution identity. Export the .p12 WITH its private key from Keychain Access (My Certificates, expand, select both, Export 2 items). See .github/RELEASING.md."
+            exit 1
+          fi
+
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" > /dev/null
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
+
+          echo "Signing identities available:"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+
+      # For xcodebuild's -authenticationKeyPath, used by -allowProvisioningUpdates to
+      # find the installed profile. fastlane takes the key from the environment instead.
+      - name: Write App Store Connect API key
+        if: steps.gate.outputs.run == 'true'
+        env:
+          ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ASC_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p ~/private_keys
+          KEY_FILE=~/private_keys/AuthKey_${ASC_KEY_ID}.p8
+          # Accept the secret as raw PEM text or base64.
+          if printf '%s' "$ASC_PRIVATE_KEY" | grep -q "BEGIN PRIVATE KEY"; then
+            printf '%s\n' "$ASC_PRIVATE_KEY" > "$KEY_FILE"
+          else
+            printf '%s' "$ASC_PRIVATE_KEY" | base64 --decode > "$KEY_FILE"
+          fi
+          chmod 600 "$KEY_FILE"
+
+      # Switches the app target to manual signing against a freshly fetched App Store
+      # profile, and reports that profile's name for the Export step.
+      - name: Provision for manual signing
+        if: steps.gate.outputs.run == 'true'
+        id: profile
+        env:
+          ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          ASC_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+          FASTLANE_SKIP_UPDATE_CHECK: "1"
+        run: bundle exec fastlane ios provision
+
+      # No CODE_SIGN_* here: the provision step has already written them into the target.
+      - name: Archive
+        if: steps.gate.outputs.run == 'true'
+        env:
+          ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          xcodebuild archive \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            -archivePath "$RUNNER_TEMP/$SCHEME.xcarchive" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath ~/private_keys/AuthKey_${ASC_KEY_ID}.p8 \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            MARKETING_VERSION=${{ steps.v.outputs.version }} \
+            CURRENT_PROJECT_VERSION=${{ steps.v.outputs.build }} \
+            | xcbeautify --renderer github-actions
+
+      - name: Export IPA
+        if: steps.gate.outputs.run == 'true'
+        env:
+          ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          PROFILE: ${{ steps.profile.outputs.profile }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$PROFILE" ]]; then
+            echo "::error::The provision step reported no profile name"
+            exit 1
+          fi
+          /usr/libexec/PlistBuddy \
+            -c "Set :provisioningProfiles:$BUNDLE_ID $PROFILE" \
+            .github/ExportOptions.plist
+
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/$SCHEME.xcarchive" \
+            -exportOptionsPlist .github/ExportOptions.plist \
+            -exportPath "$RUNNER_TEMP/export" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath ~/private_keys/AuthKey_${ASC_KEY_ID}.p8 \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            | xcbeautify --renderer github-actions
+
+      # "What to Test", shown to testers in the TestFlight app: commit subjects since
+      # the last release tag (or the last 30 commits if there is no tag yet).
+      - name: What to test
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          set -euo pipefail
+          LAST_TAG="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+          if [[ -n "$LAST_TAG" ]]; then RANGE="$LAST_TAG..HEAD"; else RANGE="-30"; fi
+          git log --format='%s' $RANGE \
+            | grep -viE '^(merge |ci:|chore:|docs:)' \
+            | sed -E 's/^/• /' \
+            | head -40 > "$RUNNER_TEMP/whats_to_test.txt" || true
+          if [[ ! -s "$RUNNER_TEMP/whats_to_test.txt" ]]; then
+            echo "• Latest changes from main." > "$RUNNER_TEMP/whats_to_test.txt"
+          fi
+          # Apple caps this field at 4000 characters.
+          head -c 3900 "$RUNNER_TEMP/whats_to_test.txt" > "$RUNNER_TEMP/wtt.tmp"
+          mv "$RUNNER_TEMP/wtt.tmp" "$RUNNER_TEMP/whats_to_test.txt"
+          echo "--- What to Test ---"; cat "$RUNNER_TEMP/whats_to_test.txt"
+
+      # pilot rather than a bare upload: it uploads, waits out Apple's processing, then
+      # hands the build to the tester groups. The wait is why this step is slow (5-15 min).
+      - name: Upload and distribute to testers
+        if: steps.gate.outputs.run == 'true'
+        env:
+          ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          ASC_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+          # Blank for an internal-only run, which is what makes pilot skip external groups.
+          # Scheduled runs always distribute externally (inputs.external is empty, not 'false').
+          TESTFLIGHT_GROUPS: ${{ inputs.external != false && vars.TESTFLIGHT_GROUPS || '' }}
+          FASTLANE_SKIP_UPDATE_CHECK: "1"
+          FASTLANE_HIDE_CHANGELOG: "1"
+        run: |
+          set -euo pipefail
+          IPA="$(find "$RUNNER_TEMP/export" -maxdepth 1 -name '*.ipa' | head -n 1)"
+          if [[ -z "$IPA" ]]; then
+            echo "::error::No .ipa produced by xcodebuild -exportArchive"
+            exit 1
+          fi
+          bundle exec fastlane ios beta ipa:"$IPA" notes:"$RUNNER_TEMP/whats_to_test.txt"
+          echo "Uploaded ${{ steps.v.outputs.version }} (${{ steps.v.outputs.build }}) to TestFlight."
+
+      - name: Upload build artifacts
+        if: always() && steps.gate.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-output
+          path: |
+            ${{ runner.temp }}/export/*.ipa
+            ${{ runner.temp }}/${{ env.SCHEME }}.xcarchive/dSYMs
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Clean up secrets
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/app-signing.keychain-db" 2>/dev/null || true
+          rm -rf ~/private_keys "$RUNNER_TEMP/export" "$RUNNER_TEMP/$SCHEME.xcarchive" 2>/dev/null || true
