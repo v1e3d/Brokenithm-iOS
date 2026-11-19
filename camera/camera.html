@@ -61,6 +61,9 @@
     <label><span>최소 인식 신뢰도: <span class="val" id="confVal"></span></span>
       <input type="range" id="conf" min="0.2" max="0.9" step="0.05">
     </label>
+    <label><span>최대 손 개수: <span class="val" id="maxHandsVal"></span></span>
+      <input type="range" id="maxHands" min="1" max="4" step="1">
+    </label>
     <label><span>판정 유지 프레임: <span class="val" id="holdVal"></span></span>
       <input type="range" id="hold" min="1" max="4" step="1">
     </label>
@@ -104,7 +107,7 @@ const video = $("video"), canvas = $("view"), ctx = canvas.getContext("2d");
 const MIN_GAP = 0.01;
 const evenBeams = (bottom, top) => Array.from({ length: BEAMS }, (_, i) => bottom + (top - bottom) * (i / (BEAMS - 1)));
 // beams[i] = normalized height of beam i+1 (index 0 = lowest beam, larger y = lower on screen)
-const DEFAULTS = { beams: evenBeams(0.85, 0.25), left: 0.05, right: 0.95, mirror: true, pad: 0.02, conf: 0.5, hold: 1, enabled: true, deviceId: "", interp: "predict" };
+const DEFAULTS = { beams: evenBeams(0.85, 0.25), left: 0.05, right: 0.95, mirror: true, pad: 0.02, conf: 0.5, hold: 1, enabled: true, deviceId: "", interp: "predict", maxHands: 4 };
 let cfg = { ...DEFAULTS, beams: DEFAULTS.beams.slice() };
 try {
   const stored = JSON.parse(localStorage.getItem("cameraAir") || "{}");
@@ -128,11 +131,12 @@ for (let i = 0; i < BEAMS; i++) {
 function bindRange(id, key, fmt) {
   const el = $(id), out = $(id + "Val");
   el.value = cfg[key]; out.textContent = fmt(cfg[key]);
-  el.addEventListener("input", () => { cfg[key] = Number(el.value); out.textContent = fmt(cfg[key]); save(); if (key === "conf") applyConfidence(); });
+  el.addEventListener("input", () => { cfg[key] = Number(el.value); out.textContent = fmt(cfg[key]); save(); if (key === "conf") applyConfidence(); if (key === "maxHands") applyMaxHands(); });
 }
 bindRange("pad", "pad", (v) => Math.round(v * 100) + "%");
 bindRange("conf", "conf", (v) => v.toFixed(2));
 bindRange("hold", "hold", (v) => v + "프레임");
+bindRange("maxHands", "maxHands", (v) => v + "개");
 $("mirror").checked = cfg.mirror;
 $("mirror").addEventListener("change", () => { cfg.mirror = $("mirror").checked; save(); });
 $("enabled").checked = cfg.enabled;
@@ -232,11 +236,14 @@ async function loadModel() {
   const files = await FilesetResolver.forVisionTasks(WASM_URL);
   const opts = (delegate) => ({
     baseOptions: { modelAssetPath: MODEL_URL, delegate },
-    runningMode: "VIDEO", numHands: 2,
+    runningMode: "VIDEO", numHands: cfg.maxHands,
     minHandDetectionConfidence: cfg.conf, minHandPresenceConfidence: cfg.conf, minTrackingConfidence: cfg.conf,
   });
   try { landmarker = await HandLandmarker.createFromOptions(files, opts("GPU")); setPill("modelState", "AI 준비됨 (GPU)", "ok"); }
   catch (e) { landmarker = await HandLandmarker.createFromOptions(files, opts("CPU")); setPill("modelState", "AI 준비됨 (CPU)", "warn"); }
+}
+function applyMaxHands() {
+  if (landmarker) landmarker.setOptions({ numHands: cfg.maxHands }).catch(() => {});
 }
 function applyConfidence() {
   if (landmarker) landmarker.setOptions({ minHandDetectionConfidence: cfg.conf, minHandPresenceConfidence: cfg.conf, minTrackingConfidence: cfg.conf }).catch(() => {});
@@ -246,7 +253,9 @@ function applyConfidence() {
 // Each detection stores, per tracked hand, the vertical span of its landmarks inside the ROI.
 // Rendering/evaluation runs every display frame and interpolates that span between camera frames.
 let lastVideoTime = -1, hands = [], detections = 0, renders = 0, fpsAt = performance.now(), fps = 0, hz = 0, inferMs = 0;
-let tracks = new Map(); // key -> { prev: sample|null, last: sample }
+let tracks = []; // [{ id, prev: sample|null, last: sample }]
+let nextTrackId = 1;
+const MATCH_DISTANCE = 0.25;
 let frameInterval = 33;
 const pending = new Array(BEAMS).fill(0);
 
@@ -257,24 +266,34 @@ function handSpan(pts) {
     if (p.x < xMin || p.x > xMax) continue;
     inside++; if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
   }
-  return inside >= 5 ? { minY, maxY } : null;
+  if (inside < 5) return null;
+  let cx = 0, cy = 0;
+  for (const p of pts) { cx += p.x; cy += p.y; }
+  return { minY, maxY, cx: cx / pts.length, cy: cy / pts.length };
 }
 
 function onDetection(result, t) {
   hands = (result.landmarks || []).map((pts) => pts.map((p) => ({ x: cfg.mirror ? 1 - p.x : p.x, y: p.y })));
-  const next = new Map();
-  hands.forEach((pts, i) => {
-    const label = result.handednesses && result.handednesses[i] && result.handednesses[i][0] ? result.handednesses[i][0].categoryName : "";
-    let key = label || String(i);
-    if (next.has(key)) key = key + i;
+  // Up to 4 hands (two people). Handedness labels repeat with several hands, so match each hand
+  // to last frame's tracks by the nearest hand centre instead, greedily from the closest pair.
+  const samples = [];
+  for (const pts of hands) {
     const span = handSpan(pts);
-    if (!span) return;
-    const sample = { t, minY: span.minY, maxY: span.maxY };
-    const old = tracks.get(key);
-    // A big jump means a different hand took this slot: do not interpolate across it.
-    const continuous = old && t - old.last.t < 250 && Math.abs(old.last.minY - sample.minY) < 0.35;
-    next.set(key, { prev: continuous ? old.last : null, last: sample });
-  });
+    if (span) samples.push({ t, minY: span.minY, maxY: span.maxY, cx: span.cx, cy: span.cy });
+  }
+  const pairs = [];
+  samples.forEach((sm, si) => tracks.forEach((tr, ti) => {
+    const d = Math.hypot(sm.cx - tr.last.cx, sm.cy - tr.last.cy);
+    if (d < MATCH_DISTANCE && t - tr.last.t < 250) pairs.push([d, si, ti]);
+  }));
+  pairs.sort((a, b) => a[0] - b[0]);
+  const usedS = new Set(), usedT = new Set(), next = [];
+  for (const [, si, ti] of pairs) {
+    if (usedS.has(si) || usedT.has(ti)) continue;
+    usedS.add(si); usedT.add(ti);
+    next.push({ id: tracks[ti].id, prev: tracks[ti].last, last: samples[si] });
+  }
+  samples.forEach((sm, si) => { if (!usedS.has(si)) next.push({ id: nextTrackId++, prev: null, last: sm }); });
   tracks = next;
   if (lastDetectAt) frameInterval = frameInterval * 0.8 + Math.min(200, t - lastDetectAt) * 0.2;
   lastDetectAt = t;
@@ -313,7 +332,7 @@ let spans = [];
 function evaluate(now) {
   // A beam is broken when its height lies inside any hand's (interpolated) vertical span, like an IR curtain.
   spans = [];
-  for (const track of tracks.values()) spans.push(spanAt(track, now));
+  for (const track of tracks) spans.push(spanAt(track, now));
   const raw = new Array(BEAMS).fill(false);
   for (const sp of spans) {
     const minY = sp.minY - cfg.pad, maxY = sp.maxY + cfg.pad;
