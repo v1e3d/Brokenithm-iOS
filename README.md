@@ -1,3 +1,13 @@
+# Brokenithm (v1e3d)
+
+This repository holds:
+
+| Path | What |
+|---|---|
+| `/` (root) | **Brokenithm-SwiftUI** iPad/iPhone app with the cabinet-style 16x2 slider. Every push builds an unsigned IPA (Actions -> "Build IPA" -> artifact). |
+| `pc-receiver/` | **Brokenithm-LAN** Windows receiver (Wi-Fi) with camera AIR. See `pc-receiver/README.md`. |
+| `legacy-objc/` | The original Objective-C Brokenithm-iOS (USB) this fork started from, kept for reference. |
+
 # Brokenithm-SwiftUI
 
 Turn your iPhone or iPad into a CHUNITHM controller.

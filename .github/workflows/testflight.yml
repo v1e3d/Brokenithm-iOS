@@ -32,8 +32,8 @@ name: TestFlight
 #     step, even if the build fails.
 
 on:
-  schedule:
-    - cron: '0 14 1 * *'   # 14:00 UTC on the 1st of each month
+  # Monthly schedule disabled in this fork: it needs the upstream App Store Connect secrets and would
+  # fail every month here. Run it by hand from the Actions tab if you add your own secrets.
   workflow_dispatch:
     inputs:
       force:
