@@ -366,7 +366,7 @@ function fastFrame(source, sw, sh) {
 // ---------- motion assist for the AI ----------
 // When the AI loses a hand it was just tracking (motion blur in low light), look for frame-to-frame change on
 // each beam line, only around where that hand was. Parameters from the benchmark grid search.
-const MOTION = { holdMs: 400, halfWidth: 0.12, thresh: 5, noiseK: 2.5, smooth: 4, minRun: 0.03 };
+const MOTION = { holdMs: 400, halfWidth: 0.12, thresh: 3, noiseK: 1.8, smooth: 4, minRun: 0.02 };
 let prevBands = null, motionRaw = new Array(BEAMS).fill(false), motionAt = 0;
 function motionAssist(source, sw, sh, t) {
   const [fw, fh] = prepareFastCanvas(source, sw, sh);

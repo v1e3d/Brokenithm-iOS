@@ -32,3 +32,5 @@ Desktop.ini
 # Camera HTTPS certificate (contains a private key)
 camera-cert.pfx
 camera-cert.cer
+
+__pycache__/

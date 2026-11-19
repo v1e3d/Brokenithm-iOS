@@ -102,7 +102,7 @@ function runFast(bandsNpy, bgNpy, variant) {
   return out;
 }
 
-const MOTION = { holdMs: 400, halfWidth: 0.12, thresh: 5, noiseK: 2.5, smooth: 4, minRun: 0.03 }; // same as camera.html
+const MOTION = { holdMs: 400, halfWidth: 0.12, thresh: 3, noiseK: 1.8, smooth: 4, minRun: 0.02 }; // same as camera.html
 const AI_VARIANTS = {
   "AI 기존": { input: "raw", sweep: false, coast: 0, pad: 0.02 },
   "AI +저조도보정": { input: "fixed", sweep: false, coast: 0, pad: 0.02 },
