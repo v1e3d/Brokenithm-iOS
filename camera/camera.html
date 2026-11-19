@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Camera AIR</title>
+<style>
+  :root { --bg:#0f1115; --panel:#181b22; --line:#2a2f3a; --text:#e6e8ee; --dim:#9aa3b2; --on:#3ddc84; --off:#3a404c; --accent:#5aa9ff; --warn:#ffb454; --bad:#ff6b6b; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.45 system-ui, "Segoe UI", "Malgun Gothic", sans-serif; }
+  header { display:flex; gap:12px; align-items:center; padding:10px 16px; border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  header h1 { font-size:16px; margin:0 8px 0 0; }
+  .pill { padding:2px 10px; border-radius:999px; background:var(--off); color:var(--text); font-size:12px; }
+  .pill.ok { background:#1f6f45; } .pill.bad { background:#7a2b2b; } .pill.warn { background:#6b5320; }
+  main { display:grid; grid-template-columns: minmax(0,1fr) 300px; gap:16px; padding:16px; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  .stage { position:relative; background:#000; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+  canvas { display:block; width:100%; height:auto; cursor:crosshair; touch-action:none; }
+  video { display:none; }
+  aside { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:14px; display:flex; flex-direction:column; gap:14px; }
+  label { display:flex; flex-direction:column; gap:4px; color:var(--dim); font-size:12px; }
+  label.row { flex-direction:row; align-items:center; gap:8px; color:var(--text); font-size:13px; }
+  select, input[type=range], button { width:100%; }
+  select, button { background:#222733; color:var(--text); border:1px solid var(--line); border-radius:6px; padding:6px 8px; font:inherit; }
+  button { cursor:pointer; } button:hover { border-color:var(--accent); }
+  .beams { display:flex; flex-direction:column-reverse; gap:4px; }
+  .beam { display:flex; align-items:center; gap:8px; }
+  .beam b { flex:1; height:16px; border-radius:4px; background:var(--off); transition:background 40ms; }
+  .beam b.on { background:var(--on); }
+  .beam span { width:52px; color:var(--dim); font-size:12px; }
+  .help { color:var(--dim); font-size:12px; margin:0; }
+  .stats { color:var(--dim); font-size:12px; font-variant-numeric: tabular-nums; }
+  .val { color:var(--text); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Camera AIR</h1>
+  <span id="wsState" class="pill">서버 연결 중…</span>
+  <span id="modelState" class="pill">AI 모델 로딩 중…</span>
+  <span id="stats" class="stats"></span>
+</header>
+<main>
+  <div class="stage">
+    <canvas id="view" width="640" height="480"></canvas>
+    <video id="video" playsinline muted></video>
+  </div>
+  <aside>
+    <div>
+      <div class="beams" id="beams"></div>
+    </div>
+    <label>카메라
+      <select id="cameraSelect"></select>
+    </label>
+    <label class="row"><input type="checkbox" id="mirror"> 좌우 반전 (화면 표시와 범위)</label>
+    <label class="row"><input type="checkbox" id="enabled" checked> 에어 입력 보내기</label>
+    <label><span>손 판정 여유: <span class="val" id="padVal"></span></span>
+      <input type="range" id="pad" min="0" max="0.08" step="0.005">
+    </label>
+    <label><span>최소 인식 신뢰도: <span class="val" id="confVal"></span></span>
+      <input type="range" id="conf" min="0.2" max="0.9" step="0.05">
+    </label>
+    <label><span>판정 유지 프레임: <span class="val" id="holdVal"></span></span>
+      <input type="range" id="hold" min="1" max="4" step="1">
+    </label>
+    <button id="reset">보정 초기화</button>
+    <p class="help">
+      <b>보정:</b> 화면의 <span style="color:#ff6b6b">빨간 선(빔 1)</span>을 슬라이더(iPad) 바로 위 높이로,
+      <span style="color:#5aa9ff">파란 선(빔 6)</span>을 손을 가장 높이 올리는 높이로 끌어다 놓으세요.
+      노란 세로선 두 개는 인식 범위입니다. 범위 밖의 손(몸, 얼굴 근처)은 무시합니다.<br>
+      <b>카메라 위치:</b> 슬라이더 옆이나 뒤쪽에서 손이 위아래로 움직이는 모습이 잘 보이게 두세요.
+    </p>
+  </aside>
+</main>
+<script type="module">
+import { FilesetResolver, HandLandmarker } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
+
+const WASM_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
+const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
+const BEAMS = 6;
+const HEARTBEAT_MS = 100;
+const HAND_LINKS = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
+
+const $ = (id) => document.getElementById(id);
+const video = $("video"), canvas = $("view"), ctx = canvas.getContext("2d");
+
+// ---------- settings (normalized 0..1, y grows downward, x in displayed orientation) ----------
+const DEFAULTS = { bottom: 0.85, top: 0.25, left: 0.05, right: 0.95, mirror: true, pad: 0.02, conf: 0.5, hold: 1, enabled: true, deviceId: "" };
+let cfg = { ...DEFAULTS };
+try { Object.assign(cfg, JSON.parse(localStorage.getItem("cameraAir") || "{}")); } catch (e) {}
+function save() { try { localStorage.setItem("cameraAir", JSON.stringify(cfg)); } catch (e) {} }
+
+// ---------- beam indicator UI ----------
+const beamEls = [];
+for (let i = 0; i < BEAMS; i++) {
+  const row = document.createElement("div");
+  row.className = "beam";
+  row.innerHTML = `<span>빔 ${i + 1}</span><b></b>`;
+  $("beams").appendChild(row);
+  beamEls.push(row.querySelector("b"));
+}
+
+function bindRange(id, key, fmt) {
+  const el = $(id), out = $(id + "Val");
+  el.value = cfg[key]; out.textContent = fmt(cfg[key]);
+  el.addEventListener("input", () => { cfg[key] = Number(el.value); out.textContent = fmt(cfg[key]); save(); if (key === "conf") applyConfidence(); });
+}
+bindRange("pad", "pad", (v) => Math.round(v * 100) + "%");
+bindRange("conf", "conf", (v) => v.toFixed(2));
+bindRange("hold", "hold", (v) => v + "프레임");
+$("mirror").checked = cfg.mirror;
+$("mirror").addEventListener("change", () => { cfg.mirror = $("mirror").checked; save(); });
+$("enabled").checked = cfg.enabled;
+$("enabled").addEventListener("change", () => { cfg.enabled = $("enabled").checked; save(); send(true); });
+$("reset").addEventListener("click", () => { Object.assign(cfg, { bottom: DEFAULTS.bottom, top: DEFAULTS.top, left: DEFAULTS.left, right: DEFAULTS.right }); save(); });
+
+// ---------- WebSocket to the bridge ----------
+let ws = null, wsOpen = false, lastSent = "", lastSentAt = 0;
+function connect() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onopen = () => { wsOpen = true; setPill("wsState", "서버 연결됨", "ok"); send(true); };
+  ws.onclose = () => { wsOpen = false; setPill("wsState", "서버 끊김 - 재연결 중", "bad"); setTimeout(connect, 1000); };
+  ws.onerror = () => { try { ws.close(); } catch (e) {} };
+}
+connect();
+
+let beamState = new Array(BEAMS).fill(false);
+let lastDetectAt = 0;
+function send(force) {
+  if (!wsOpen) return;
+  // If detection stalls (camera frozen, window throttled), report no AIR instead of repeating a stale state.
+  const fresh = performance.now() - lastDetectAt < 300;
+  const msg = cfg.enabled && fresh ? beamState.map((b) => (b ? "1" : "0")).join("") : "000000";
+  const now = performance.now();
+  if (force || msg !== lastSent || now - lastSentAt >= HEARTBEAT_MS) {
+    ws.send(msg); lastSent = msg; lastSentAt = now;
+  }
+}
+setInterval(() => send(false), HEARTBEAT_MS);
+
+function setPill(id, text, cls) { const el = $(id); el.textContent = text; el.className = "pill " + (cls || ""); }
+
+// ---------- camera ----------
+async function listCameras() {
+  const devices = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "videoinput");
+  const sel = $("cameraSelect");
+  sel.innerHTML = "";
+  devices.forEach((d, i) => {
+    const o = document.createElement("option");
+    o.value = d.deviceId; o.textContent = d.label || `카메라 ${i + 1}`;
+    sel.appendChild(o);
+  });
+  if (cfg.deviceId && devices.some((d) => d.deviceId === cfg.deviceId)) sel.value = cfg.deviceId;
+}
+$("cameraSelect").addEventListener("change", () => { cfg.deviceId = $("cameraSelect").value; save(); startCamera(); });
+
+let stream = null;
+async function startCamera() {
+  if (stream) stream.getTracks().forEach((t) => t.stop());
+  const constraints = { audio: false, video: { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 60 } } };
+  if (cfg.deviceId) constraints.video.deviceId = { exact: cfg.deviceId };
+  try {
+    stream = await navigator.mediaDevices.getUserMedia(constraints);
+  } catch (e) {
+    setPill("modelState", "카메라를 열 수 없음: " + e.name, "bad");
+    throw e;
+  }
+  video.srcObject = stream;
+  await video.play();
+  canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+  await listCameras();
+}
+
+// ---------- AI model ----------
+let landmarker = null;
+async function loadModel() {
+  const files = await FilesetResolver.forVisionTasks(WASM_URL);
+  const opts = (delegate) => ({
+    baseOptions: { modelAssetPath: MODEL_URL, delegate },
+    runningMode: "VIDEO", numHands: 2,
+    minHandDetectionConfidence: cfg.conf, minHandPresenceConfidence: cfg.conf, minTrackingConfidence: cfg.conf,
+  });
+  try { landmarker = await HandLandmarker.createFromOptions(files, opts("GPU")); setPill("modelState", "AI 준비됨 (GPU)", "ok"); }
+  catch (e) { landmarker = await HandLandmarker.createFromOptions(files, opts("CPU")); setPill("modelState", "AI 준비됨 (CPU)", "warn"); }
+}
+function applyConfidence() {
+  if (landmarker) landmarker.setOptions({ minHandDetectionConfidence: cfg.conf, minHandPresenceConfidence: cfg.conf, minTrackingConfidence: cfg.conf }).catch(() => {});
+}
+
+// ---------- detection loop ----------
+let lastVideoTime = -1, hands = [], frames = 0, fpsAt = performance.now(), fps = 0, inferMs = 0;
+const pending = new Array(BEAMS).fill(0);
+
+function beamY(i) { return cfg.bottom + (cfg.top - cfg.bottom) * (i / (BEAMS - 1)); }
+
+function evaluate() {
+  // Each hand covers a vertical span; a beam is broken when its height lies inside any hand's span (like an IR curtain).
+  const raw = new Array(BEAMS).fill(false);
+  const xMin = Math.min(cfg.left, cfg.right), xMax = Math.max(cfg.left, cfg.right);
+  for (const pts of hands) {
+    let minY = Infinity, maxY = -Infinity, inside = 0;
+    for (const p of pts) {
+      if (p.x < xMin || p.x > xMax) continue;
+      inside++; if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
+    }
+    if (inside < 5) continue;
+    minY -= cfg.pad; maxY += cfg.pad;
+    for (let i = 0; i < BEAMS; i++) { const y = beamY(i); if (y >= minY && y <= maxY) raw[i] = true; }
+  }
+  for (let i = 0; i < BEAMS; i++) {
+    if (raw[i] === beamState[i]) { pending[i] = 0; continue; }
+    if (++pending[i] >= cfg.hold) { beamState[i] = raw[i]; pending[i] = 0; }
+  }
+  beamState.forEach((on, i) => beamEls[i].classList.toggle("on", on));
+  send(false);
+}
+
+function draw() {
+  const w = canvas.width, h = canvas.height;
+  ctx.save();
+  if (cfg.mirror) { ctx.translate(w, 0); ctx.scale(-1, 1); }
+  ctx.drawImage(video, 0, 0, w, h);
+  ctx.restore();
+  // hands (already converted to displayed orientation)
+  ctx.lineWidth = 2; ctx.strokeStyle = "#ffffff"; ctx.fillStyle = "#5aa9ff";
+  for (const pts of hands) {
+    ctx.beginPath();
+    for (const [a, b] of HAND_LINKS) { ctx.moveTo(pts[a].x * w, pts[a].y * h); ctx.lineTo(pts[b].x * w, pts[b].y * h); }
+    ctx.stroke();
+    for (const p of pts) { ctx.beginPath(); ctx.arc(p.x * w, p.y * h, 3, 0, Math.PI * 2); ctx.fill(); }
+  }
+  // ROI
+  ctx.strokeStyle = "#ffb454"; ctx.setLineDash([6, 6]);
+  for (const x of [cfg.left, cfg.right]) { ctx.beginPath(); ctx.moveTo(x * w, 0); ctx.lineTo(x * w, h); ctx.stroke(); }
+  ctx.setLineDash([]);
+  // beams
+  for (let i = 0; i < BEAMS; i++) {
+    const y = beamY(i) * h;
+    ctx.strokeStyle = beamState[i] ? "#3ddc84" : (i === 0 ? "#ff6b6b" : i === BEAMS - 1 ? "#5aa9ff" : "rgba(255,255,255,0.45)");
+    ctx.lineWidth = (i === 0 || i === BEAMS - 1) ? 3 : 1.5;
+    ctx.beginPath(); ctx.moveTo(Math.min(cfg.left, cfg.right) * w, y); ctx.lineTo(Math.max(cfg.left, cfg.right) * w, y); ctx.stroke();
+    ctx.fillStyle = ctx.strokeStyle; ctx.font = "bold 13px system-ui"; ctx.fillText(String(i + 1), Math.min(cfg.left, cfg.right) * w + 4, y - 4);
+  }
+}
+
+function tick() {
+  if (landmarker && video.readyState >= 2 && video.currentTime !== lastVideoTime) {
+    lastVideoTime = video.currentTime;
+    const t0 = performance.now();
+    const result = landmarker.detectForVideo(video, t0);
+    inferMs = inferMs * 0.9 + (performance.now() - t0) * 0.1;
+    hands = (result.landmarks || []).map((pts) => pts.map((p) => ({ x: cfg.mirror ? 1 - p.x : p.x, y: p.y })));
+    lastDetectAt = performance.now();
+    evaluate();
+    frames++;
+  }
+  draw();
+  const now = performance.now();
+  if (now - fpsAt >= 1000) {
+    fps = frames * 1000 / (now - fpsAt); frames = 0; fpsAt = now;
+    $("stats").textContent = `${fps.toFixed(0)} fps · AI ${inferMs.toFixed(1)} ms · 손 ${hands.length}`;
+  }
+  if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(tick); else requestAnimationFrame(tick);
+}
+
+// ---------- drag calibration lines ----------
+let dragging = null;
+function pointer(e) { const r = canvas.getBoundingClientRect(); return { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height }; }
+canvas.addEventListener("pointerdown", (e) => {
+  const p = pointer(e), tol = 0.03;
+  const candidates = [["bottom", Math.abs(p.y - cfg.bottom)], ["top", Math.abs(p.y - cfg.top)], ["left", Math.abs(p.x - cfg.left)], ["right", Math.abs(p.x - cfg.right)]]
+    .filter(([, d]) => d < tol).sort((a, b) => a[1] - b[1]);
+  if (candidates.length) { dragging = candidates[0][0]; canvas.setPointerCapture(e.pointerId); }
+});
+canvas.addEventListener("pointermove", (e) => {
+  if (!dragging) return;
+  const p = pointer(e), clamp = (v) => Math.min(1, Math.max(0, v));
+  cfg[dragging] = clamp(dragging === "left" || dragging === "right" ? p.x : p.y);
+});
+canvas.addEventListener("pointerup", () => { if (dragging) { dragging = null; save(); } });
+
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) setPill("modelState", "창이 가려져 멈춤 - Start-Camera-Browser.cmd로 열어 주세요", "warn");
+});
+
+(async () => {
+  try {
+    await startCamera();
+    await loadModel();
+    tick();
+  } catch (e) {
+    console.error(e);
+    if (!landmarker) setPill("modelState", "시작 실패: " + (e.message || e), "bad");
+  }
+})();
+</script>
+</body>
+</html>

@@ -17,6 +17,7 @@ namespace BrokenithmLan
         public bool Diagnostics;
         public bool DisableLed;
         public bool ShowHelp;
+        public int CameraPort;
 
         public static BridgeOptions Parse(string[] args)
         {
@@ -31,6 +32,14 @@ namespace BrokenithmLan
                 else if (argument == "--no-led")
                 {
                     options.DisableLed = true;
+                }
+                else if (argument == "--camera")
+                {
+                    if (options.CameraPort == 0) options.CameraPort = 8090;
+                }
+                else if (argument == "--camera-port")
+                {
+                    options.CameraPort = ParseNumber(NextValue(args, ref i), argument, 1024, 65535);
                 }
                 else if (argument == "--diagnostics")
                 {

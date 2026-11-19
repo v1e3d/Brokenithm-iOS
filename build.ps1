@@ -47,6 +47,9 @@ if ($Package) {
         'Start-LAN.cmd',
         'Start-LAN-NoLED.cmd',
         'Start-LAN-Diagnostics.cmd',
+        'Start-LAN-Camera.cmd',
+        'Start-Camera-Browser.cmd',
+        'camera\camera.html',
         'README.md',
         'docs\PROTOCOL.md',
         'docs\TROUBLESHOOTING.md'

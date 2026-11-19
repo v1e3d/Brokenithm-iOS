@@ -17,6 +17,7 @@
     <Reference Include="System" />
     <Reference Include="System.Core" />
     <Compile Include="src\BridgeOptions.cs" />
+    <Compile Include="src\CameraAirServer.cs" />
     <Compile Include="src\AsyncConsoleLog.cs" />
     <Compile Include="src\ConnectionNotice.cs" />
     <Compile Include="src\DnsSd.cs" />
@@ -26,6 +27,9 @@
     <Compile Include="src\Protocol.cs" />
     <Compile Include="src\SharedMemoryState.cs" />
     <None Include="src\App.config" />
+    <None Include="camera\camera.html">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

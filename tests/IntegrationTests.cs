@@ -27,6 +27,7 @@ namespace BrokenithmLan.Tests
             Run("DNS-SD discovery packets and cache", DiscoveryTests.RunAll);
             Run("non-blocking console logging", ConsoleLoggingTests.RunAll);
             Run("quiet mode and handshake-only success notification", QuietModeTests.RunAll);
+            Run("camera AIR web server and AIR merge", CameraAirTests.RunAll);
             Console.WriteLine(failures == 0 ? "All tests passed." : failures + " test(s) failed.");
             return failures == 0 ? 0 : 1;
         }

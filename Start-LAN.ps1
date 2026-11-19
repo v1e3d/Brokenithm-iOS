@@ -4,7 +4,9 @@ param(
     [string]$Device,
     [string]$LogDirectory,
     [switch]$Diagnostics,
-    [switch]$NoLed
+    [switch]$NoLed,
+    [switch]$Camera,
+    [ValidateRange(1024, 65535)][int]$CameraPort = 8090
 )
 
 $ErrorActionPreference = 'Stop'
@@ -32,6 +34,7 @@ try {
     if (-not [string]::IsNullOrWhiteSpace($LogDirectory)) { $bridgeArguments += @('--log-dir', $LogDirectory) }
     if ($Diagnostics) { $bridgeArguments += '--diagnostics' }
     if ($NoLed) { $bridgeArguments += '--no-led' }
+    if ($Camera) { $bridgeArguments += @('--camera-port', $CameraPort.ToString()) }
     & $program @bridgeArguments
     if ($LASTEXITCODE -ne 0) { throw "Bridge exited with code $LASTEXITCODE." }
 } catch {

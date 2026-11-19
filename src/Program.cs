@@ -8,7 +8,7 @@ namespace BrokenithmLan
 {
     internal static class Program
     {
-        private const string BuildVersion = "2026.10.29-quiet1";
+        private const string BuildVersion = "2026.10.29-quiet1+camera1";
         private delegate bool ConsoleControlHandler(uint control);
         private static ConsoleControlHandler consoleHandler;
 
@@ -150,12 +150,20 @@ namespace BrokenithmLan
                 Console.CancelKeyPress += cancelHandler;
                 AppDomain.CurrentDomain.ProcessExit += exitHandler;
                 SetConsoleCtrlHandler(consoleHandler, true);
+                CameraAirServer camera = null;
                 try
                 {
+                    if (options.CameraPort > 0)
+                    {
+                        camera = new CameraAirServer(state, options.CameraPort, log);
+                        camera.Start(stop.Token);
+                        Console.WriteLine("Camera AIR: open " + camera.Url + " in Chrome or Edge on this PC.");
+                    }
                     new LanBridge(options, state, log, new MdnsDiscovery(options.DiscoveryTimeoutMs, log), onConnected).Run(stop.Token);
                 }
                 finally
                 {
+                    if (camera != null) camera.Dispose();
                     state.ClearInputs();
                     Console.CancelKeyPress -= cancelHandler;
                     AppDomain.CurrentDomain.ProcessExit -= exitHandler;
@@ -172,6 +180,7 @@ namespace BrokenithmLan
             Console.WriteLine("       Brokenithm-LAN.exe --ip <iPad IP> [--port 24864] [--no-led]");
             Console.WriteLine("       [--discover-timeout-ms 3000]");
             Console.WriteLine("       [--diagnostics] [--log-dir <directory>]");
+            Console.WriteLine("       [--camera] [--camera-port 8090]   camera AIR web page on http://localhost:<port>/");
             Console.WriteLine("       [--retry-ms 1000] [--connect-timeout-ms 3000] [--handshake-timeout-ms 5000]");
             Console.WriteLine("       Brokenithm-LAN.exe --help");
             Console.WriteLine("Without --ip, discover _brokenithm._tcp.local automatically. Manual IP bypasses discovery.");
