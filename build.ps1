@@ -53,6 +53,7 @@ if ($Package) {
         'Make-Camera-Cert.cmd',
         'Make-Camera-Cert.ps1',
         'camera\camera.html',
+        'camera\camera-core.js',
         'README.md',
         'docs\PROTOCOL.md',
         'docs\TROUBLESHOOTING.md'

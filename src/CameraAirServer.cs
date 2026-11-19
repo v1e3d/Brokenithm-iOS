@@ -217,6 +217,18 @@ namespace BrokenithmLan
                     Respond(stream, 200, "OK", "text/html; charset=utf-8", File.ReadAllText(pagePath, Encoding.UTF8));
                     return;
                 }
+                if (path == "/camera-core.js")
+                {
+                    // Judging logic shared with the offline benchmark (tools/airbench).
+                    string corePath = Path.Combine(Path.GetDirectoryName(pagePath), "camera-core.js");
+                    if (!File.Exists(corePath))
+                    {
+                        Respond(stream, 500, "Internal Server Error", "text/plain", "Missing " + corePath);
+                        return;
+                    }
+                    Respond(stream, 200, "OK", "text/javascript; charset=utf-8", File.ReadAllText(corePath, Encoding.UTF8));
+                    return;
+                }
                 if (path == "/status")
                 {
                     byte[] air = state.ReadAir();

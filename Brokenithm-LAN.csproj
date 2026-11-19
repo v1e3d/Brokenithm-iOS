@@ -27,6 +27,9 @@
     <Compile Include="src\Protocol.cs" />
     <Compile Include="src\SharedMemoryState.cs" />
     <None Include="src\App.config" />
+    <None Include="camera\camera-core.js">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
     <None Include="camera\camera.html">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
