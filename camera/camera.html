@@ -29,6 +29,7 @@
   .beam b.on { background:var(--on); }
   .beam span { width:52px; color:var(--dim); font-size:12px; }
   .help { color:var(--dim); font-size:12px; margin:0; }
+  .btns { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
   .stats { color:var(--dim); font-size:12px; font-variant-numeric: tabular-nums; }
   .val { color:var(--text); }
 </style>
@@ -63,10 +64,25 @@
     <label><span>판정 유지 프레임: <span class="val" id="holdVal"></span></span>
       <input type="range" id="hold" min="1" max="4" step="1">
     </label>
-    <button id="reset">보정 초기화</button>
+    <label>보간 (프레임 사이 손 위치)
+      <select id="interp">
+        <option value="predict">예측: 지연 줄이기 (추천)</option>
+        <option value="smooth">부드럽게: 프레임 사이를 채움 (+1프레임 지연)</option>
+        <option value="off">끄기</option>
+      </select>
+    </label>
+    <div>
+      <div class="help" style="margin-bottom:6px">빔 높이 (<span class="val" id="beamInfo"></span>)</div>
+      <div class="btns">
+        <button id="allUp">▲ 전체 위로</button><button id="allDown">▼ 전체 아래로</button>
+        <button id="widen">간격 넓게</button><button id="narrow">간격 좁게</button>
+        <button id="even">균등 배치</button><button id="reset">보정 초기화</button>
+      </div>
+    </div>
     <p class="help">
       <b>보정:</b> 화면의 <span style="color:#ff6b6b">빨간 선(빔 1)</span>을 슬라이더(iPad) 바로 위 높이로,
       <span style="color:#5aa9ff">파란 선(빔 6)</span>을 손을 가장 높이 올리는 높이로 끌어다 놓으세요.
+      가운데 선(빔 2~5)도 하나씩 끌어서 높이를 바꿀 수 있습니다.
       노란 세로선 두 개는 인식 범위입니다. 범위 밖의 손(몸, 얼굴 근처)은 무시합니다.<br>
       <b>카메라 위치:</b> 슬라이더 옆이나 뒤쪽에서 손이 위아래로 움직이는 모습이 잘 보이게 두세요.
     </p>
@@ -85,9 +101,18 @@ const $ = (id) => document.getElementById(id);
 const video = $("video"), canvas = $("view"), ctx = canvas.getContext("2d");
 
 // ---------- settings (normalized 0..1, y grows downward, x in displayed orientation) ----------
-const DEFAULTS = { bottom: 0.85, top: 0.25, left: 0.05, right: 0.95, mirror: true, pad: 0.02, conf: 0.5, hold: 1, enabled: true, deviceId: "" };
-let cfg = { ...DEFAULTS };
-try { Object.assign(cfg, JSON.parse(localStorage.getItem("cameraAir") || "{}")); } catch (e) {}
+const MIN_GAP = 0.01;
+const evenBeams = (bottom, top) => Array.from({ length: BEAMS }, (_, i) => bottom + (top - bottom) * (i / (BEAMS - 1)));
+// beams[i] = normalized height of beam i+1 (index 0 = lowest beam, larger y = lower on screen)
+const DEFAULTS = { beams: evenBeams(0.85, 0.25), left: 0.05, right: 0.95, mirror: true, pad: 0.02, conf: 0.5, hold: 1, enabled: true, deviceId: "", interp: "predict" };
+let cfg = { ...DEFAULTS, beams: DEFAULTS.beams.slice() };
+try {
+  const stored = JSON.parse(localStorage.getItem("cameraAir") || "{}");
+  if (!Array.isArray(stored.beams) && typeof stored.bottom === "number" && typeof stored.top === "number") stored.beams = evenBeams(stored.bottom, stored.top);
+  delete stored.bottom; delete stored.top;
+  Object.assign(cfg, stored);
+  if (!Array.isArray(cfg.beams) || cfg.beams.length !== BEAMS) cfg.beams = DEFAULTS.beams.slice();
+} catch (e) {}
 function save() { try { localStorage.setItem("cameraAir", JSON.stringify(cfg)); } catch (e) {} }
 
 // ---------- beam indicator UI ----------
@@ -112,7 +137,37 @@ $("mirror").checked = cfg.mirror;
 $("mirror").addEventListener("change", () => { cfg.mirror = $("mirror").checked; save(); });
 $("enabled").checked = cfg.enabled;
 $("enabled").addEventListener("change", () => { cfg.enabled = $("enabled").checked; save(); send(true); });
-$("reset").addEventListener("click", () => { Object.assign(cfg, { bottom: DEFAULTS.bottom, top: DEFAULTS.top, left: DEFAULTS.left, right: DEFAULTS.right }); save(); });
+$("interp").value = cfg.interp;
+$("interp").addEventListener("change", () => { cfg.interp = $("interp").value; save(); });
+
+// ---------- beam height controls ----------
+const clamp01 = (v) => Math.min(1, Math.max(0, v));
+function normalizeBeams() {
+  // Keep beam 1 lowest and beam 6 highest with a minimum gap, all inside the frame.
+  const b = cfg.beams;
+  b[0] = Math.min(1, Math.max(MIN_GAP * (BEAMS - 1), b[0]));
+  for (let i = 1; i < BEAMS; i++) b[i] = Math.min(b[i], b[i - 1] - MIN_GAP);
+  if (b[BEAMS - 1] < 0) { const shift = -b[BEAMS - 1]; for (let i = 0; i < BEAMS; i++) b[i] += shift; }
+  updateBeamInfo();
+}
+function updateBeamInfo() {
+  const span = cfg.beams[0] - cfg.beams[BEAMS - 1];
+  $("beamInfo").textContent = `영역 ${Math.round(span * 100)}% · 빔1 ${Math.round((1 - cfg.beams[0]) * 100)}% 높이`;
+}
+function moveAll(dy) { cfg.beams = cfg.beams.map((y) => y + dy); if (cfg.beams[0] > 1) cfg.beams = cfg.beams.map((y) => y - (cfg.beams[0] - 1)); normalizeBeams(); save(); }
+function scaleSpan(factor) {
+  // Scale around beam 1 so the beam just above the slider stays put.
+  const base = cfg.beams[0];
+  cfg.beams = cfg.beams.map((y) => base + (y - base) * factor);
+  normalizeBeams(); save();
+}
+$("allUp").addEventListener("click", () => moveAll(-0.02));
+$("allDown").addEventListener("click", () => moveAll(0.02));
+$("widen").addEventListener("click", () => scaleSpan(1.1));
+$("narrow").addEventListener("click", () => scaleSpan(1 / 1.1));
+$("even").addEventListener("click", () => { cfg.beams = evenBeams(cfg.beams[0], cfg.beams[BEAMS - 1]); normalizeBeams(); save(); });
+$("reset").addEventListener("click", () => { cfg.beams = DEFAULTS.beams.slice(); cfg.left = DEFAULTS.left; cfg.right = DEFAULTS.right; normalizeBeams(); save(); });
+normalizeBeams();
 
 // ---------- WebSocket to the bridge ----------
 let ws = null, wsOpen = false, lastSent = "", lastSentAt = 0;
@@ -187,25 +242,82 @@ function applyConfidence() {
   if (landmarker) landmarker.setOptions({ minHandDetectionConfidence: cfg.conf, minHandPresenceConfidence: cfg.conf, minTrackingConfidence: cfg.conf }).catch(() => {});
 }
 
-// ---------- detection loop ----------
-let lastVideoTime = -1, hands = [], frames = 0, fpsAt = performance.now(), fps = 0, inferMs = 0;
+// ---------- detection (camera frames) ----------
+// Each detection stores, per tracked hand, the vertical span of its landmarks inside the ROI.
+// Rendering/evaluation runs every display frame and interpolates that span between camera frames.
+let lastVideoTime = -1, hands = [], detections = 0, renders = 0, fpsAt = performance.now(), fps = 0, hz = 0, inferMs = 0;
+let tracks = new Map(); // key -> { prev: sample|null, last: sample }
+let frameInterval = 33;
 const pending = new Array(BEAMS).fill(0);
 
-function beamY(i) { return cfg.bottom + (cfg.top - cfg.bottom) * (i / (BEAMS - 1)); }
-
-function evaluate() {
-  // Each hand covers a vertical span; a beam is broken when its height lies inside any hand's span (like an IR curtain).
-  const raw = new Array(BEAMS).fill(false);
+function handSpan(pts) {
   const xMin = Math.min(cfg.left, cfg.right), xMax = Math.max(cfg.left, cfg.right);
-  for (const pts of hands) {
-    let minY = Infinity, maxY = -Infinity, inside = 0;
-    for (const p of pts) {
-      if (p.x < xMin || p.x > xMax) continue;
-      inside++; if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
-    }
-    if (inside < 5) continue;
-    minY -= cfg.pad; maxY += cfg.pad;
-    for (let i = 0; i < BEAMS; i++) { const y = beamY(i); if (y >= minY && y <= maxY) raw[i] = true; }
+  let minY = Infinity, maxY = -Infinity, inside = 0;
+  for (const p of pts) {
+    if (p.x < xMin || p.x > xMax) continue;
+    inside++; if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
+  }
+  return inside >= 5 ? { minY, maxY } : null;
+}
+
+function onDetection(result, t) {
+  hands = (result.landmarks || []).map((pts) => pts.map((p) => ({ x: cfg.mirror ? 1 - p.x : p.x, y: p.y })));
+  const next = new Map();
+  hands.forEach((pts, i) => {
+    const label = result.handednesses && result.handednesses[i] && result.handednesses[i][0] ? result.handednesses[i][0].categoryName : "";
+    let key = label || String(i);
+    if (next.has(key)) key = key + i;
+    const span = handSpan(pts);
+    if (!span) return;
+    const sample = { t, minY: span.minY, maxY: span.maxY };
+    const old = tracks.get(key);
+    // A big jump means a different hand took this slot: do not interpolate across it.
+    const continuous = old && t - old.last.t < 250 && Math.abs(old.last.minY - sample.minY) < 0.35;
+    next.set(key, { prev: continuous ? old.last : null, last: sample });
+  });
+  tracks = next;
+  if (lastDetectAt) frameInterval = frameInterval * 0.8 + Math.min(200, t - lastDetectAt) * 0.2;
+  lastDetectAt = t;
+  detections++;
+}
+
+function detectLoop() {
+  if (landmarker && video.readyState >= 2 && video.currentTime !== lastVideoTime) {
+    lastVideoTime = video.currentTime;
+    const t0 = performance.now();
+    const result = landmarker.detectForVideo(video, t0);
+    inferMs = inferMs * 0.9 + (performance.now() - t0) * 0.1;
+    onDetection(result, t0);
+  }
+  if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(detectLoop); else setTimeout(detectLoop, 4);
+}
+
+// Span of a track at render time `now`, according to the interpolation mode.
+function spanAt(track, now) {
+  const { prev, last } = track;
+  if (cfg.interp === "off" || !prev) return { minY: last.minY, maxY: last.maxY };
+  const dt = Math.max(1, last.t - prev.t);
+  let k;
+  if (cfg.interp === "smooth") {
+    // Show the motion one camera frame late, filling the gap between the last two frames.
+    k = (now - frameInterval - prev.t) / dt;
+    k = Math.min(1, Math.max(0, k));
+  } else {
+    // Predict: continue the last velocity, but never further than one camera frame ahead.
+    k = 1 + Math.min(now - last.t, dt, frameInterval) / dt;
+  }
+  return { minY: prev.minY + (last.minY - prev.minY) * k, maxY: prev.maxY + (last.maxY - prev.maxY) * k };
+}
+
+let spans = [];
+function evaluate(now) {
+  // A beam is broken when its height lies inside any hand's (interpolated) vertical span, like an IR curtain.
+  spans = [];
+  for (const track of tracks.values()) spans.push(spanAt(track, now));
+  const raw = new Array(BEAMS).fill(false);
+  for (const sp of spans) {
+    const minY = sp.minY - cfg.pad, maxY = sp.maxY + cfg.pad;
+    for (let i = 0; i < BEAMS; i++) { const y = cfg.beams[i]; if (y >= minY && y <= maxY) raw[i] = true; }
   }
   for (let i = 0; i < BEAMS; i++) {
     if (raw[i] === beamState[i]) { pending[i] = 0; continue; }
@@ -221,7 +333,7 @@ function draw() {
   if (cfg.mirror) { ctx.translate(w, 0); ctx.scale(-1, 1); }
   ctx.drawImage(video, 0, 0, w, h);
   ctx.restore();
-  // hands (already converted to displayed orientation)
+  // hands from the last camera frame (already in displayed orientation)
   ctx.lineWidth = 2; ctx.strokeStyle = "#ffffff"; ctx.fillStyle = "#5aa9ff";
   for (const pts of hands) {
     ctx.beginPath();
@@ -230,54 +342,59 @@ function draw() {
     for (const p of pts) { ctx.beginPath(); ctx.arc(p.x * w, p.y * h, 3, 0, Math.PI * 2); ctx.fill(); }
   }
   // ROI
+  const xMin = Math.min(cfg.left, cfg.right) * w, xMax = Math.max(cfg.left, cfg.right) * w;
   ctx.strokeStyle = "#ffb454"; ctx.setLineDash([6, 6]);
   for (const x of [cfg.left, cfg.right]) { ctx.beginPath(); ctx.moveTo(x * w, 0); ctx.lineTo(x * w, h); ctx.stroke(); }
   ctx.setLineDash([]);
+  // interpolated hand spans used for judging (cyan bars at the right edge of the ROI)
+  ctx.fillStyle = "rgba(0, 220, 255, 0.55)";
+  for (const sp of spans) ctx.fillRect(xMax - 14, (sp.minY - cfg.pad) * h, 10, (sp.maxY - sp.minY + cfg.pad * 2) * h);
   // beams
   for (let i = 0; i < BEAMS; i++) {
-    const y = beamY(i) * h;
-    ctx.strokeStyle = beamState[i] ? "#3ddc84" : (i === 0 ? "#ff6b6b" : i === BEAMS - 1 ? "#5aa9ff" : "rgba(255,255,255,0.45)");
-    ctx.lineWidth = (i === 0 || i === BEAMS - 1) ? 3 : 1.5;
-    ctx.beginPath(); ctx.moveTo(Math.min(cfg.left, cfg.right) * w, y); ctx.lineTo(Math.max(cfg.left, cfg.right) * w, y); ctx.stroke();
-    ctx.fillStyle = ctx.strokeStyle; ctx.font = "bold 13px system-ui"; ctx.fillText(String(i + 1), Math.min(cfg.left, cfg.right) * w + 4, y - 4);
+    const y = cfg.beams[i] * h;
+    ctx.strokeStyle = beamState[i] ? "#3ddc84" : (i === 0 ? "#ff6b6b" : i === BEAMS - 1 ? "#5aa9ff" : "rgba(255,255,255,0.6)");
+    ctx.lineWidth = dragging === "beam" + i ? 4 : (i === 0 || i === BEAMS - 1) ? 3 : 2;
+    ctx.beginPath(); ctx.moveTo(xMin, y); ctx.lineTo(xMax, y); ctx.stroke();
+    ctx.fillStyle = ctx.strokeStyle; ctx.font = "bold 13px system-ui"; ctx.fillText(String(i + 1), xMin + 4, y - 4);
   }
 }
 
-function tick() {
-  if (landmarker && video.readyState >= 2 && video.currentTime !== lastVideoTime) {
-    lastVideoTime = video.currentTime;
-    const t0 = performance.now();
-    const result = landmarker.detectForVideo(video, t0);
-    inferMs = inferMs * 0.9 + (performance.now() - t0) * 0.1;
-    hands = (result.landmarks || []).map((pts) => pts.map((p) => ({ x: cfg.mirror ? 1 - p.x : p.x, y: p.y })));
-    lastDetectAt = performance.now();
-    evaluate();
-    frames++;
-  }
+function renderLoop(now) {
+  if (landmarker) evaluate(now);
   draw();
-  const now = performance.now();
+  renders++;
   if (now - fpsAt >= 1000) {
-    fps = frames * 1000 / (now - fpsAt); frames = 0; fpsAt = now;
-    $("stats").textContent = `${fps.toFixed(0)} fps · AI ${inferMs.toFixed(1)} ms · 손 ${hands.length}`;
+    fps = detections * 1000 / (now - fpsAt); hz = renders * 1000 / (now - fpsAt); detections = 0; renders = 0; fpsAt = now;
+    const mode = { predict: "예측", smooth: "부드럽게", off: "보간 끔" }[cfg.interp];
+    $("stats").textContent = `카메라 ${fps.toFixed(0)} fps → 판정 ${hz.toFixed(0)} Hz (${mode}) · AI ${inferMs.toFixed(1)} ms · 손 ${hands.length}`;
   }
-  if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(tick); else requestAnimationFrame(tick);
+  requestAnimationFrame(renderLoop);
 }
 
 // ---------- drag calibration lines ----------
 let dragging = null;
 function pointer(e) { const r = canvas.getBoundingClientRect(); return { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height }; }
 canvas.addEventListener("pointerdown", (e) => {
-  const p = pointer(e), tol = 0.03;
-  const candidates = [["bottom", Math.abs(p.y - cfg.bottom)], ["top", Math.abs(p.y - cfg.top)], ["left", Math.abs(p.x - cfg.left)], ["right", Math.abs(p.x - cfg.right)]]
+  const p = pointer(e), tol = e.pointerType === "touch" ? 0.05 : 0.03;
+  const candidates = cfg.beams.map((y, i) => ["beam" + i, Math.abs(p.y - y)])
+    .concat([["left", Math.abs(p.x - cfg.left)], ["right", Math.abs(p.x - cfg.right)]])
     .filter(([, d]) => d < tol).sort((a, b) => a[1] - b[1]);
-  if (candidates.length) { dragging = candidates[0][0]; canvas.setPointerCapture(e.pointerId); }
+  if (candidates.length) { dragging = candidates[0][0]; canvas.setPointerCapture(e.pointerId); e.preventDefault(); }
 });
 canvas.addEventListener("pointermove", (e) => {
   if (!dragging) return;
-  const p = pointer(e), clamp = (v) => Math.min(1, Math.max(0, v));
-  cfg[dragging] = clamp(dragging === "left" || dragging === "right" ? p.x : p.y);
+  const p = pointer(e);
+  if (dragging === "left" || dragging === "right") { cfg[dragging] = clamp01(p.x); return; }
+  const i = Number(dragging.slice(4));
+  // Each beam moves on its own but stays between its neighbours.
+  const lower = i === 0 ? 1 : cfg.beams[i - 1] - MIN_GAP;
+  const upper = i === BEAMS - 1 ? 0 : cfg.beams[i + 1] + MIN_GAP;
+  cfg.beams[i] = Math.min(lower, Math.max(upper, p.y));
+  updateBeamInfo();
 });
-canvas.addEventListener("pointerup", () => { if (dragging) { dragging = null; save(); } });
+const endDrag = () => { if (dragging) { dragging = null; save(); } };
+canvas.addEventListener("pointerup", endDrag);
+canvas.addEventListener("pointercancel", endDrag);
 
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) setPill("modelState", "창이 가려져 멈춤 - Start-Camera-Browser.cmd로 열어 주세요", "warn");
@@ -287,7 +404,8 @@ document.addEventListener("visibilitychange", () => {
   try {
     await startCamera();
     await loadModel();
-    tick();
+    detectLoop();
+    requestAnimationFrame(renderLoop);
   } catch (e) {
     console.error(e);
     if (!landmarker) setPill("modelState", "시작 실패: " + (e.message || e), "bad");
