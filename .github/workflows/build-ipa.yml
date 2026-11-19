@@ -24,7 +24,7 @@ env:
 jobs:
   build:
     name: Test slider mapping and build unsigned IPA
-    runs-on: macos-15  # macos-26 runners never got assigned for this repository (job stayed queued)
+    runs-on: macos-15-intel  # Intel runner: macOS arm64 hosted runners were unavailable (capacity)
     steps:
       - name: Checkout
         uses: actions/checkout@v4
