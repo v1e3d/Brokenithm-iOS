@@ -1,0 +1,87 @@
+name: Build IPA
+
+# Builds an UNSIGNED .ipa on every push (and on demand) and keeps it as a workflow artifact.
+# Install it with Sideloadly / AltStore / TrollStore, which re-sign it with your own Apple ID.
+# No certificates or secrets are used here.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SCHEME: brokenithm-swiftui
+  PROJECT: brokenithm-swiftui.xcodeproj
+
+jobs:
+  build:
+    name: Test slider mapping and build unsigned IPA
+    runs-on: macos-26
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Slider mapping tests
+        run: |
+          set -euo pipefail
+          xcrun swiftc -o slider-tests brokenithm-swiftui/Input/SliderMapping.swift Tests/SliderMappingTests/main.swift
+          ./slider-tests
+
+      - name: Build (Release, signing disabled)
+        run: |
+          set -euo pipefail
+          VERSION="$(sed -nE 's/^[[:space:]]*MARKETING_VERSION = ([^;]+);/\1/p' "$PROJECT/project.pbxproj" | head -1)"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          xcodebuild \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/DerivedData \
+            CURRENT_PROJECT_VERSION="$(date -u +%Y%m%d%H%M)" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS="" \
+            build 2>&1 | tee build.log | (xcbeautify --renderer github-actions || cat)
+
+      - name: Package IPA
+        id: package
+        run: |
+          set -euo pipefail
+          APP="build/DerivedData/Build/Products/Release-iphoneos/$SCHEME.app"
+          test -d "$APP"
+          IPA="Brokenithm-SwiftUI-${VERSION}-${GITHUB_SHA::7}-unsigned.ipa"
+          rm -rf build/Payload && mkdir -p build/Payload
+          cp -R "$APP" build/Payload/
+          (cd build && zip -qry "../$IPA" Payload)
+          shasum -a 256 "$IPA" | tee "$IPA.sha256"
+          echo "ipa=$IPA" >> "$GITHUB_OUTPUT"
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.ipa }}
+          path: |
+            ${{ steps.package.outputs.ipa }}
+            ${{ steps.package.outputs.ipa }}.sha256
+          if-no-files-found: error
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log

@@ -34,6 +34,27 @@ Every [release](https://github.com/OWCramer/Brokenithm-SwiftUI/releases) include
 
 Free Apple IDs need to re-sign sideloaded apps every 7 days. TestFlight has no such limit.
 
+## Slider: 16 keys x 2 rows (this branch)
+
+The cabinet's slider has 32 sensors: 16 keys, each split into a top and a bottom half
+(sensor 1 = top-right, 2 = bottom-right, ... 31 = top-left, 32 = bottom-left).
+This build sends the same layout:
+
+- **Split Keys Top/Bottom** (menu, on by default): the upper half of a key presses its top sensor,
+  the lower half its bottom sensor. A TAP that lands on top of a HOLD in the same lane is played by
+  holding one half and tapping the other, as on the cabinet.
+- **Edge Assist** (on by default): a touch within 1/4 key of an edge also presses the neighbouring key.
+- Every change sends one complete state built from all fingers, so a held finger never flickers off
+  when another finger moves, lifts or touches the air area.
+
+Fixes compared with upstream: only the bottom sensors (odd indices) were ever sent, so a second finger
+or a tap on top of a hold on the same key never registered; partial states were sent while touches were
+processed one by one (held lanes briefly released: dropped HOLDs, ghost TAPs); a finger lifting or touching
+the air area cleared other fingers' lanes; the right-edge assist only worked on the left half of the slider.
+
+`Tests/SliderMappingTests` checks the mapping (`swiftc -o t brokenithm-swiftui/Input/SliderMapping.swift Tests/SliderMappingTests/main.swift && ./t`).
+`.github/workflows/build-ipa.yml` runs those tests and builds an unsigned IPA on every push.
+
 ## Setup
 
 1. Make sure your PC and your iPhone or iPad are on the same Wi-Fi network.

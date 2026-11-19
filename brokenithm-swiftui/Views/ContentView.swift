@@ -14,6 +14,10 @@ struct ContentView: View {
     @State var sheetShowing: Bool = false
     @AppStorage("airOn") var airOn: Bool = false
     @AppStorage("airHeightOption") var airHeightOption: String = "Normal"
+    /// Top/bottom split of every slider key, like the cabinet (16 x 2 sensors).
+    @AppStorage("splitRows") var splitRows: Bool = true
+    /// Touches near a key edge also press the neighbouring key.
+    @AppStorage("edgeAssist") var edgeAssist: Bool = true
     let airOptions: [String] = ["Small", "Normal", "Large"]
     
     var body: some View {
@@ -40,6 +44,12 @@ struct ContentView: View {
                             }
                         }
                         .pickerStyle(.menu)
+                        Toggle(isOn: $splitRows) {
+                            Text("Split Keys Top/Bottom")
+                        }
+                        Toggle(isOn: $edgeAssist) {
+                            Text("Edge Assist")
+                        }
                         Button("Restart Connection", systemImage: "arrow.clockwise") {
                             try? connection?.restart()
                         }
@@ -65,7 +75,8 @@ struct ContentView: View {
                     .foregroundStyle(.ultraThinMaterial)
                     .frame(height: 3)
                     .ignoresSafeArea()
-                InputBoardView(connection: $connection, airOn: $airOn, airOption: $airHeightOption)
+                InputBoardView(connection: $connection, airOn: $airOn, airOption: $airHeightOption,
+                               splitRows: splitRows, edgeAssist: edgeAssist)
             }
         }
         .ignoresSafeArea(edges: [.bottom])

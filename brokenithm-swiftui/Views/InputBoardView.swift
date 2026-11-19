@@ -8,118 +8,74 @@
 import SwiftUI
 
 struct InputBoardView: View {
+    /// Slider sensor states in game order (see SliderMapping): index 2k = top row, 2k+1 = bottom row
+    /// of the k-th key from the right.
     @State var lanesTouching: [UInt8] = Array(repeating: 0, count: 32)
     @State var airTouching: [UInt8] = Array(repeating: 0, count: 6)
     @Binding var connection: Listener?
     @Binding var airOn: Bool
     @Binding var airOption: String
+    var splitRows: Bool = true
+    var edgeAssist: Bool = true
 
     var body: some View {
         GeometryReader { proxy in
-            let rectWidth = proxy.size.width / 16
             let airHeight = proxy.size.height / (airOption == "Normal" ? 3 : airOption == "Small" ? 4.5 : 2)
             let airBlockHeight = airHeight / 6
+            let sliderTop: CGFloat = airOn ? airHeight : 0
             VStack(spacing: 0) {
                 if airOn {
                     AirInputView(size: airHeight, airTouching: $airTouching, connection: $connection)
                 }
-                SliderView(lanesTouching: $lanesTouching, connection: $connection, airOn: airOn)
+                SliderView(lanesTouching: $lanesTouching, connection: $connection, airOn: airOn, splitRows: splitRows)
             }
             .sensoryFeedback(.success, trigger: airOption)
             .gesture(
                 SpatialEventGesture()
                     .onChanged { events in
-                        lanesTouching = Array(repeating: 0, count: 32)
-                        airTouching = Array(repeating: 0, count: 6)
-                        for event in events {
-                            if event.phase == .active {
-                                let y = event.location.y
-                                let x = event.location.x
-                                let laneBeingTouched: Int = .init(x / rectWidth)
-                                let airBeingTouched: Int = .init(y / airBlockHeight)
-                                let locate = x / rectWidth
-                                let locateAir = y / airBlockHeight
-                                if (y < airHeight && airOn) || (y < 0) {
-                                    laneChange(location: locate, lane: laneBeingTouched, isDelete: true)
-                                    if airOn, y > 0 {
-                                        airChange(location: locateAir, airLane: airBeingTouched)
-                                    }
-                                } else {
-                                    laneChange(location: locate, lane: laneBeingTouched)
+                        // Rebuild the whole state from every finger that is down, then send it once.
+                        // (Sending after each finger, or clearing lanes when one finger lifts or touches
+                        // the air area, made other held fingers flicker off/on: broken HOLDs and ghost TAPs.)
+                        var sliderTouches: [SliderMapping.Touch] = []
+                        var air = [UInt8](repeating: 0, count: 6)
+                        for event in events where event.phase == .active {
+                            let x = event.location.x
+                            let y = event.location.y
+                            if (y < airHeight && airOn) || y < 0 {
+                                if airOn, y > 0 {
+                                    setAir(&air, block: Int(y / airBlockHeight))
                                 }
-                                connection?.sendInput(arrayLane: lanesTouching.reversed(), arrayAir: airTouching)
-
                             } else {
-                                let y = event.location.y
-                                let x = event.location.x
-                                let laneBeingTouched: Int = .init(x / rectWidth)
-                                let airBeingTouched: Int = .init(y / airBlockHeight)
-                                let locate = x / rectWidth
-                                let locateAir = y / airBlockHeight
-                                if airOn {
-                                    airChange(location: locateAir, airLane: airBeingTouched, isDelete: true)
-                                }
-                                laneChange(location: locate, lane: laneBeingTouched, isDelete: true)
-                                connection?.sendInput(arrayLane: lanesTouching.reversed(), arrayAir: airTouching)
+                                sliderTouches.append(SliderMapping.Touch(x: Double(x), y: Double(y - sliderTop)))
                             }
                         }
+                        let options = SliderMapping.Options(splitRows: splitRows, edgeAssist: edgeAssist)
+                        let lanes = SliderMapping.sensors(for: sliderTouches,
+                                                          width: Double(proxy.size.width),
+                                                          height: Double(proxy.size.height - sliderTop),
+                                                          options: options)
+                        update(lanes: lanes, air: air)
                     }
-                    .onEnded { events in
-                        for _ in events {
-                            airTouching = Array(repeating: 0, count: 6)
-                            lanesTouching = Array(repeating: 0, count: 32)
-                            connection?.sendInput(arrayLane: lanesTouching.reversed(), arrayAir: airTouching)
-                        }
+                    .onEnded { _ in
+                        update(lanes: Array(repeating: 0, count: 32), air: Array(repeating: 0, count: 6))
                     }
             )
         }
     }
 
-    private func laneChange(location: CGFloat, lane: Int, isDelete: Bool = false) {
-        var laneBeingTouched = lane
-        var assignee: UInt8 = 99
-        if isDelete {
-            assignee = 0
-        } else {
-            assignee = 128
-        }
-        if laneBeingTouched > 15 {
-            laneBeingTouched = 15
-        }
-        if laneBeingTouched < 0 {
-            laneBeingTouched = 0
-        }
-        if location - CGFloat(laneBeingTouched) > 0.75 {
-            lanesTouching[laneBeingTouched * 2] = assignee
-            if !(laneBeingTouched * 2 >= 15) {
-                lanesTouching[(laneBeingTouched + 1) * 2] = assignee
-            }
-        } else if location - CGFloat(laneBeingTouched) < 0.25 {
-            lanesTouching[laneBeingTouched * 2] = assignee
-            if !(laneBeingTouched * 2 <= 1) {
-                lanesTouching[(laneBeingTouched - 1) * 2] = assignee
-            }
-        } else {
-            lanesTouching[laneBeingTouched * 2] = assignee
-        }
+    /// Sends the new state only when something changed.
+    private func update(lanes: [UInt8], air: [UInt8]) {
+        if lanes == lanesTouching && air == airTouching { return }
+        lanesTouching = lanes
+        airTouching = air
+        connection?.sendInput(arrayLane: lanes, arrayAir: air)
     }
 
-    private func airChange(location: CGFloat, airLane: Int, isDelete: Bool = false) {
-        var laneBeingTouched = airLane
+    /// Air blocks from the top of the air area; unchanged from the original mapping.
+    private func setAir(_ air: inout [UInt8], block: Int) {
         let airLanes = [4, 5, 2, 3, 0, 1]
-        var assignee: UInt8 = 99
-        if isDelete {
-            assignee = 0
-        } else {
-            assignee = 128
-        }
-        if laneBeingTouched > 5 {
-            laneBeingTouched = 5
-        }
-        if laneBeingTouched < 0 {
-            laneBeingTouched = 0
-        }
-        airTouching[airLanes[laneBeingTouched]] = assignee
+        let index = min(max(block, 0), 5)
+        air[airLanes[index]] = 128
     }
 }
 

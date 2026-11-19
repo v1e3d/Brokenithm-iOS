@@ -10,8 +10,10 @@ import SwiftUI
 struct SliderView: View {
     @Binding var lanesTouching: [UInt8]
     @Binding var connection: Listener?
-    
+
     var airOn: Bool
+    /// Draw the top/bottom split of every key (matches SliderMapping.Options.splitRows).
+    var splitRows: Bool = true
 
     var body: some View {
         GeometryReader { proxy in
@@ -21,6 +23,22 @@ struct SliderView: View {
                     Rectangle()
                         .fill(getColor(con: connection, i: i, laneSplit: false))
                         .foregroundStyle(.ultraThinMaterial)
+                        .overlay {
+                            // pressed sensors: top and bottom half of the key
+                            VStack(spacing: 0) {
+                                Rectangle()
+                                    .fill(Color.white.opacity(isPressed(column: i, top: true) ? 0.35 : 0))
+                                Rectangle()
+                                    .fill(Color.white.opacity(isPressed(column: i, top: false) ? 0.35 : 0))
+                            }
+                        }
+                        .overlay {
+                            if splitRows {
+                                Rectangle()
+                                    .fill(Color.white.opacity(0.25))
+                                    .frame(height: 1)
+                            }
+                        }
                         .overlay {
                             if i < 15 {
                                 Rectangle()
@@ -33,19 +51,28 @@ struct SliderView: View {
             }
         }
     }
-    
+
+    private func isPressed(column: Int, top: Bool) -> Bool {
+        if splitRows {
+            return lanesTouching[SliderMapping.sensorIndex(column: column, top: top)] != 0
+        }
+        // without rows both halves light up when the key is pressed
+        return lanesTouching[SliderMapping.sensorIndex(column: column, top: true)] != 0
+            || lanesTouching[SliderMapping.sensorIndex(column: column, top: false)] != 0
+    }
+
     private func getColor(con: Listener?, i: Int, laneSplit: Bool) -> Color {
         if con == nil {
             return .black
         }
-        
+
         if laneSplit {
             return Color(red: Double((con?.ledArray[(i * 2) * 3 + 4])!) / 255, green: Double((con?.ledArray[(i * 2) * 3 + 3])!) / 255, blue: Double((con?.ledArray[(i * 2) * 3 + 5])!) / 255)
         }
-        
+
         return Color(red: Double((con?.ledArray[(i * 2) * 3 + 1])!) / 255, green: Double((con?.ledArray[(i * 2) * 3])!) / 255, blue: Double((con?.ledArray[(i * 2) * 3 + 2])!) / 255)
     }
-    
+
 }
 
 #Preview {

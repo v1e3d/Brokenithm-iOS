@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		1E2850852CBCD39000B12F3E /* README.md in Resources */ = {isa = PBXBuildFile; fileRef = 1E2850842CBCD39000B12F3E /* README.md */; };
 		1E5B246D2C822AB40009640E /* Network.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E5B24642C822AB40009640E /* Network.swift */; };
+		1EF1A0022F00000100A1B2C3 /* SliderMapping.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1EF1A0012F00000100A1B2C3 /* SliderMapping.swift */; };
 		1E5B246E2C822AB40009640E /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E5B24682C822AB40009640E /* ContentView.swift */; };
 		1E5B246F2C822AB40009640E /* brokenithm_swiftuiApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E5B246B2C822AB40009640E /* brokenithm_swiftuiApp.swift */; };
 		1E5B24702C822AB40009640E /* Preview Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 1E5B24662C822AB40009640E /* Preview Assets.xcassets */; };
@@ -23,6 +24,7 @@
 		1E2850842CBCD39000B12F3E /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 		1E33B1712C7E549200D606C4 /* brokenithm-swiftui.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "brokenithm-swiftui.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		1E5B24642C822AB40009640E /* Network.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Network.swift; sourceTree = "<group>"; };
+		1EF1A0012F00000100A1B2C3 /* SliderMapping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SliderMapping.swift; sourceTree = "<group>"; };
 		1E5B24662C822AB40009640E /* Preview Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Preview Assets.xcassets"; sourceTree = "<group>"; };
 		1E5B24682C822AB40009640E /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		1E5B246A2C822AB40009640E /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -62,6 +64,14 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
+		1EF1A0032F00000100A1B2C3 /* Input */ = {
+			isa = PBXGroup;
+			children = (
+				1EF1A0012F00000100A1B2C3 /* SliderMapping.swift */,
+			);
+			path = Input;
+			sourceTree = "<group>";
+		};
 		1E5B24652C822AB40009640E /* Network */ = {
 			isa = PBXGroup;
 			children = (
@@ -95,6 +105,7 @@
 			children = (
 				1EB7525A2C879CAF0034DA54 /* Info.plist */,
 				1E5B246B2C822AB40009640E /* brokenithm_swiftuiApp.swift */,
+				1EF1A0032F00000100A1B2C3 /* Input */,
 				1E5B24652C822AB40009640E /* Network */,
 				1E5B24692C822AB40009640E /* Views */,
 				1E5B24672C822AB40009640E /* Preview Content */,
@@ -180,6 +191,7 @@
 				1EAE27972C91F976007E178F /* AirInputView.swift in Sources */,
 				1EEC05AB2C977581001DAA1D /* AboutView.swift in Sources */,
 				1E5B246D2C822AB40009640E /* Network.swift in Sources */,
+				1EF1A0022F00000100A1B2C3 /* SliderMapping.swift in Sources */,
 				1EAE27992C9246B4007E178F /* InputBoardView.swift in Sources */,
 				1E5B246E2C822AB40009640E /* ContentView.swift in Sources */,
 				1E5B246F2C822AB40009640E /* brokenithm_swiftuiApp.swift in Sources */,
