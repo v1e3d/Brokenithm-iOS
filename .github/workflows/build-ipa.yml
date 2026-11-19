@@ -24,13 +24,16 @@ env:
 jobs:
   build:
     name: Test slider mapping and build unsigned IPA
-    runs-on: macos-26
+    runs-on: macos-15  # macos-26 runners never got assigned for this repository (job stayed queued)
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Show Xcode version
-        run: xcodebuild -version
+      - name: Select newest Xcode
+        run: |
+          XCODE="$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+          sudo xcode-select -s "$XCODE"
+          xcodebuild -version
 
       - name: Slider mapping tests
         run: |
