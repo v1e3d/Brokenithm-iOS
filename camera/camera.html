@@ -100,8 +100,8 @@
     <label class="row"><input type="checkbox" id="motionAssist"> 모션 보조: AI가 손을 놓친 순간(어두운 곳의 빠른 움직임)을 화면 변화로 보충</label>
     <label>보간 (프레임 사이 손 위치)
       <select id="interp">
-        <option value="predict">예측: 지연 줄이기 (추천)</option>
-        <option value="smooth">부드럽게: 프레임 사이를 채움 (+1프레임 지연)</option>
+        <option value="smooth">부드럽게: 프레임 사이를 채움 (추천)</option>
+        <option value="predict">예측: 최대 1프레임 앞당김 (에어는 빠르면 FAST 판정이라 비추천)</option>
         <option value="off">끄기</option>
       </select>
     </label>
@@ -139,7 +139,7 @@ const video = $("video"), canvas = $("view"), ctx = canvas.getContext("2d");
 const MIN_GAP = 0.01;
 const evenBeams = (bottom, top) => Array.from({ length: BEAMS }, (_, i) => bottom + (top - bottom) * (i / (BEAMS - 1)));
 // beams[i] = normalized height of beam i+1 (index 0 = lowest beam, larger y = lower on screen)
-const DEFAULTS = { beams: evenBeams(0.85, 0.25), left: 0.05, right: 0.95, mirror: true, pad: 0.02, conf: 0.5, hold: 1, enabled: true, deviceId: "", interp: "predict", maxHands: 2, fps: 120, res: "640x480", mode: "ai", thresh: 4, sens: 0.02, lowLight: "auto", motionAssist: true };
+const DEFAULTS = { beams: evenBeams(0.85, 0.25), left: 0.05, right: 0.95, mirror: true, pad: 0.02, conf: 0.5, hold: 1, enabled: true, deviceId: "", interp: "smooth", maxHands: 2, fps: 120, res: "640x480", mode: "ai", thresh: 4, sens: 0.02, lowLight: "auto", motionAssist: true };
 let cfg = { ...DEFAULTS, beams: DEFAULTS.beams.slice() };
 try {
   const stored = JSON.parse(localStorage.getItem("cameraAir") || "{}");
