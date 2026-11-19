@@ -18,6 +18,9 @@ namespace BrokenithmLan
         public bool DisableLed;
         public bool ShowHelp;
         public int CameraPort;
+        public bool CameraLan;
+        public string CameraCertificate;
+        public string CameraCertificatePassword;
 
         public static BridgeOptions Parse(string[] args)
         {
@@ -40,6 +43,19 @@ namespace BrokenithmLan
                 else if (argument == "--camera-port")
                 {
                     options.CameraPort = ParseNumber(NextValue(args, ref i), argument, 1024, 65535);
+                }
+                else if (argument == "--camera-lan")
+                {
+                    options.CameraLan = true;
+                    if (options.CameraPort == 0) options.CameraPort = 8090;
+                }
+                else if (argument == "--camera-cert")
+                {
+                    options.CameraCertificate = NextValue(args, ref i);
+                }
+                else if (argument == "--camera-cert-password")
+                {
+                    options.CameraCertificatePassword = NextValue(args, ref i);
                 }
                 else if (argument == "--diagnostics")
                 {
@@ -95,6 +111,10 @@ namespace BrokenithmLan
             if (!options.ShowHelp && options.Host != null && options.DeviceName != null)
             {
                 throw new ArgumentException("Use --device with automatic discovery, or --ip for a manual address.");
+            }
+            if (!options.ShowHelp && options.CameraCertificate != null && options.CameraPort == 0)
+            {
+                throw new ArgumentException("--camera-cert requires --camera, --camera-port or --camera-lan.");
             }
             return options;
         }

@@ -6,6 +6,7 @@ param(
     [switch]$Diagnostics,
     [switch]$NoLed,
     [switch]$Camera,
+    [switch]$CameraLan,
     [ValidateRange(1024, 65535)][int]$CameraPort = 8090
 )
 
@@ -34,7 +35,16 @@ try {
     if (-not [string]::IsNullOrWhiteSpace($LogDirectory)) { $bridgeArguments += @('--log-dir', $LogDirectory) }
     if ($Diagnostics) { $bridgeArguments += '--diagnostics' }
     if ($NoLed) { $bridgeArguments += '--no-led' }
-    if ($Camera) { $bridgeArguments += @('--camera-port', $CameraPort.ToString()) }
+    if ($Camera -or $CameraLan) { $bridgeArguments += @('--camera-port', $CameraPort.ToString()) }
+    if ($CameraLan) {
+        $bridgeArguments += '--camera-lan'
+        $certificate = Join-Path $PSScriptRoot 'camera-cert.pfx'
+        if (Test-Path -LiteralPath $certificate) {
+            $bridgeArguments += @('--camera-cert', $certificate, '--camera-cert-password', 'brokenithm')
+        } else {
+            Write-Host 'camera-cert.pfx not found: run Make-Camera-Cert.ps1 first, or other devices cannot use their camera.' -ForegroundColor Yellow
+        }
+    }
     & $program @bridgeArguments
     if ($LASTEXITCODE -ne 0) { throw "Bridge exited with code $LASTEXITCODE." }
 } catch {

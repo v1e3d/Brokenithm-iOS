@@ -44,7 +44,20 @@ PC 接收端不依赖 iTunes、Apple USB 驱动、Bonjour 安装包或旧版 USB
 3. 카메라 권한을 허용하고, 빨간 선(빔 1)과 파란 선(빔 6)을 끌어서 높이를 맞춥니다. 노란 세로선 두 개 밖에 있는 손은 무시합니다.
 4. 테스트 메뉴의 入力テスト에서 サイドデバイス 入力1~6이 켜지는지 확인합니다.
 
-- 웹서버는 루프백(127.0.0.1, ::1)에서만 열리고 LAN에는 열리지 않습니다. 포트는 `-CameraPort`나 `--camera-port`로 바꿀 수 있습니다.
+- 기본값에서는 웹서버가 루프백(127.0.0.1, ::1)에서만 열립니다. 포트는 `-CameraPort`나 `--camera-port`로 바꿀 수 있습니다.
+
+### 다른 기기(폰, 태블릿) 카메라 쓰기
+
+브라우저는 localhost가 아닌 주소에서는 HTTPS일 때만 카메라를 열어 줍니다. 그래서 인증서가 필요합니다.
+
+1. `Make-Camera-Cert.cmd`를 한 번 실행합니다. 같은 폴더에 `camera-cert.pfx`와 `camera-cert.cer`가 생깁니다. PC IP가 바뀌면 다시 실행하세요.
+2. `Start-LAN-Camera-External.cmd`를 실행하면 `Camera AIR (other devices): https://192.168.x.x:8090/` 주소가 표시됩니다.
+3. Windows 방화벽이 물어보면 **개인 네트워크**만 허용합니다.
+4. 폰에서 그 주소를 엽니다. 인증서 경고가 뜨면 "고급 → 계속 진행"을 누릅니다.
+   - iPhone/iPad Safari에서 경고 화면을 넘겨도 연결이 안 되면, `camera-cert.cer`를 기기로 보내서 설치한 뒤 설정 → 일반 → 정보 → 인증서 신뢰 설정에서 신뢰를 켜세요.
+5. 직접 실행할 때 쓰는 옵션: `Brokenithm-LAN.exe --camera-lan --camera-cert camera-cert.pfx --camera-cert-password brokenithm`
+
+LAN 모드에서는 같은 네트워크의 누구나 이 페이지를 열어 AIR 입력을 보낼 수 있습니다. 집처럼 믿을 수 있는 네트워크에서만 쓰세요. `camera-cert.pfx`에는 개인 키가 들어 있으니 공유하지 마세요.
 - AI 모델과 런타임은 CDN(jsdelivr, storage.googleapis.com)에서 받으므로 인터넷 연결이 필요합니다.
 - 페이지가 300 ms 동안 새 프레임을 처리하지 못하거나 서버가 500 ms 동안 메시지를 받지 못하면, AIR가 켜진 채로 남지 않도록 자동으로 해제합니다.
 - WebSocket 메시지 형식: 텍스트 6글자(`0` 또는 `1`)이고, 빔 1(가장 낮음)부터 빔 6(가장 높음) 순서입니다.

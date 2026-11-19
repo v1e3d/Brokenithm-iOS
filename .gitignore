@@ -28,3 +28,7 @@
 .DS_Store
 Thumbs.db
 Desktop.ini
+
+# Camera HTTPS certificate (contains a private key)
+camera-cert.pfx
+camera-cert.cer

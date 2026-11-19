@@ -117,7 +117,7 @@ $("reset").addEventListener("click", () => { Object.assign(cfg, { bottom: DEFAUL
 // ---------- WebSocket to the bridge ----------
 let ws = null, wsOpen = false, lastSent = "", lastSentAt = 0;
 function connect() {
-  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
   ws.onopen = () => { wsOpen = true; setPill("wsState", "서버 연결됨", "ok"); send(true); };
   ws.onclose = () => { wsOpen = false; setPill("wsState", "서버 끊김 - 재연결 중", "bad"); setTimeout(connect, 1000); };
   ws.onerror = () => { try { ws.close(); } catch (e) {} };

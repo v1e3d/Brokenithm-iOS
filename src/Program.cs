@@ -155,9 +155,16 @@ namespace BrokenithmLan
                 {
                     if (options.CameraPort > 0)
                     {
-                        camera = new CameraAirServer(state, options.CameraPort, log);
+                        System.Security.Cryptography.X509Certificates.X509Certificate2 certificate = options.CameraCertificate == null ? null :
+                            CameraAirServer.LoadCertificate(options.CameraCertificate, options.CameraCertificatePassword);
+                        camera = new CameraAirServer(state, options.CameraPort, log, options.CameraLan, certificate);
                         camera.Start(stop.Token);
                         Console.WriteLine("Camera AIR: open " + camera.Url + " in Chrome or Edge on this PC.");
+                        foreach (string url in camera.LanUrls()) Console.WriteLine("Camera AIR (other devices): " + url);
+                        if (options.CameraLan && certificate == null)
+                        {
+                            Console.WriteLine("Warning: without --camera-cert, browsers on other devices will not allow camera access (HTTPS required).");
+                        }
                     }
                     new LanBridge(options, state, log, new MdnsDiscovery(options.DiscoveryTimeoutMs, log), onConnected).Run(stop.Token);
                 }
@@ -181,6 +188,7 @@ namespace BrokenithmLan
             Console.WriteLine("       [--discover-timeout-ms 3000]");
             Console.WriteLine("       [--diagnostics] [--log-dir <directory>]");
             Console.WriteLine("       [--camera] [--camera-port 8090]   camera AIR web page on http://localhost:<port>/");
+            Console.WriteLine("       [--camera-lan] [--camera-cert <file.pfx>] [--camera-cert-password <pw>]   open it to the LAN over HTTPS");
             Console.WriteLine("       [--retry-ms 1000] [--connect-timeout-ms 3000] [--handshake-timeout-ms 5000]");
             Console.WriteLine("       Brokenithm-LAN.exe --help");
             Console.WriteLine("Without --ip, discover _brokenithm._tcp.local automatically. Manual IP bypasses discovery.");

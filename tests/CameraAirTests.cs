@@ -26,6 +26,13 @@ namespace BrokenithmLan.Tests
             try { BridgeOptions.Parse(new string[] { "--camera-port", "80" }); }
             catch (ArgumentException) { rejected = true; }
             Assert(rejected, "privileged camera port rejected");
+            BridgeOptions lan = BridgeOptions.Parse(new string[] { "--camera-lan", "--camera-cert", "c.pfx", "--camera-cert-password", "pw" });
+            Assert(lan.CameraLan && lan.CameraPort == 8090 && lan.CameraCertificate == "c.pfx" && lan.CameraCertificatePassword == "pw", "--camera-lan with certificate");
+            Assert(!BridgeOptions.Parse(new string[] { "--camera" }).CameraLan, "camera stays on loopback unless --camera-lan");
+            bool certWithoutCamera = false;
+            try { BridgeOptions.Parse(new string[] { "--camera-cert", "c.pfx" }); }
+            catch (ArgumentException) { certWithoutCamera = true; }
+            Assert(certWithoutCamera, "--camera-cert alone rejected");
         }
 
         private static void BeamDecoding()

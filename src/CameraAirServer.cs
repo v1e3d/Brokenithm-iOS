@@ -2,15 +2,19 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Net;
+using System.Net.NetworkInformation;
+using System.Net.Security;
 using System.Net.Sockets;
+using System.Security.Authentication;
 using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Threading;
 
 namespace BrokenithmLan
 {
     /// <summary>
-    /// Minimal loopback web server for camera AIR. Serves camera\camera.html at "/" and a WebSocket at "/ws".
+    /// Minimal web server for camera AIR (loopback by default, optionally the LAN with HTTPS). Serves camera\camera.html at "/" and a WebSocket at "/ws".
     /// The page sends six characters ('0' or '1'), one per IR beam from the lowest beam (1) to the highest (6).
     /// Implemented on raw TCP so it needs no HttpListener URL ACL or administrator rights.
     /// </summary>
@@ -27,6 +31,8 @@ namespace BrokenithmLan
         private readonly Action<string> log;
         private readonly int port;
         private readonly string pagePath;
+        private readonly bool lan;
+        private readonly X509Certificate2 certificate;
         private readonly List<TcpListener> listeners = new List<TcpListener>();
         private readonly List<TcpClient> clients = new List<TcpClient>();
         private readonly object gate = new object();
@@ -36,20 +42,63 @@ namespace BrokenithmLan
         private bool disposed;
 
         public CameraAirServer(SharedMemoryState state, int port, Action<string> log)
+            : this(state, port, log, false, null) { }
+
+        /// <param name="lan">Listen on every interface instead of loopback only.</param>
+        /// <param name="certificate">When set, serve HTTPS/WSS. Browsers only allow camera access on non-localhost pages over HTTPS.</param>
+        public CameraAirServer(SharedMemoryState state, int port, Action<string> log, bool lan, X509Certificate2 certificate)
         {
+            if (certificate != null && !certificate.HasPrivateKey) throw new ArgumentException("The camera HTTPS certificate has no private key.");
             this.state = state;
             this.port = port;
             this.log = log;
+            this.lan = lan;
+            this.certificate = certificate;
             pagePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "camera", "camera.html");
         }
 
-        public string Url { get { return "http://localhost:" + port + "/"; } }
+        private string Scheme { get { return certificate == null ? "http" : "https"; } }
+
+        public string Url { get { return Scheme + "://localhost:" + port + "/"; } }
+
+        /// <summary>URLs other devices can open: one per active IPv4 address of this PC (LAN mode only).</summary>
+        public IList<string> LanUrls()
+        {
+            List<string> urls = new List<string>();
+            if (!lan) return urls;
+            foreach (NetworkInterface adapter in NetworkInterface.GetAllNetworkInterfaces())
+            {
+                if (adapter.OperationalStatus != OperationalStatus.Up || adapter.NetworkInterfaceType == NetworkInterfaceType.Loopback) continue;
+                foreach (UnicastIPAddressInformation address in adapter.GetIPProperties().UnicastAddresses)
+                {
+                    if (address.Address.AddressFamily != AddressFamily.InterNetwork) continue;
+                    byte[] b = address.Address.GetAddressBytes();
+                    if (b[0] == 169 && b[1] == 254) continue;
+                    urls.Add(Scheme + "://" + address.Address + ":" + port + "/");
+                }
+            }
+            return urls;
+        }
+
+        public static X509Certificate2 LoadCertificate(string path, string password)
+        {
+            if (!File.Exists(path)) throw new ArgumentException("Camera certificate not found: " + path);
+            return new X509Certificate2(path, password ?? String.Empty, X509KeyStorageFlags.UserKeySet);
+        }
 
         public void Start(CancellationToken token)
         {
-            // Browsers may resolve "localhost" to either 127.0.0.1 or ::1, so listen on both loopback addresses (never on the LAN).
-            AddListener(IPAddress.Loopback, true);
-            if (Socket.OSSupportsIPv6) AddListener(IPAddress.IPv6Loopback, false);
+            if (lan)
+            {
+                AddListener(IPAddress.Any, true);
+                if (Socket.OSSupportsIPv6) AddListener(IPAddress.IPv6Any, false);
+            }
+            else
+            {
+                // Browsers may resolve "localhost" to either 127.0.0.1 or ::1, so listen on both loopback addresses.
+                AddListener(IPAddress.Loopback, true);
+                if (Socket.OSSupportsIPv6) AddListener(IPAddress.IPv6Loopback, false);
+            }
             watchdog = new Timer(CheckStale, null, 100, 100);
             token.Register(Dispose);
         }
@@ -127,8 +176,16 @@ namespace BrokenithmLan
             try
             {
                 client.NoDelay = true;
-                NetworkStream stream = client.GetStream();
-                stream.ReadTimeout = 5000;
+                NetworkStream network = client.GetStream();
+                network.ReadTimeout = 5000;
+                network.WriteTimeout = 5000;
+                Stream stream = network;
+                if (certificate != null)
+                {
+                    SslStream secure = new SslStream(network, false);
+                    secure.AuthenticateAsServer(certificate, false, SslProtocols.Tls12, false);
+                    stream = secure;
+                }
                 string path;
                 Dictionary<string, string> headers;
                 if (!ReadRequest(stream, out path, out headers)) return;
@@ -146,7 +203,7 @@ namespace BrokenithmLan
                         ComputeAccept(key) + "\r\n\r\n";
                     byte[] bytes = Encoding.ASCII.GetBytes(handshake);
                     stream.Write(bytes, 0, bytes.Length);
-                    stream.ReadTimeout = Timeout.Infinite;
+                    network.ReadTimeout = Timeout.Infinite;
                     RunSocket(stream);
                     return;
                 }
@@ -171,7 +228,7 @@ namespace BrokenithmLan
             catch (Exception error)
             {
                 if (!(error is IOException) && !(error is SocketException) && !(error is ObjectDisposedException) &&
-                    !(error is InvalidDataException))
+                    !(error is InvalidDataException) && !(error is AuthenticationException))
                 {
                     log("Camera server request failed: " + error.Message);
                 }
@@ -212,7 +269,7 @@ namespace BrokenithmLan
             return true;
         }
 
-        private void RunSocket(NetworkStream stream)
+        private void RunSocket(Stream stream)
         {
             lock (gate) activeSockets++;
             log("Camera page connected.");
