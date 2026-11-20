@@ -66,6 +66,7 @@
       <select id="mode">
         <option value="ai">AI 손 인식 (정확, 느림)</option>
         <option value="fast">빠른 모드: 배경 비교 (AI 없음, 120fps 대응)</option>
+        <option value="hybrid">하이브리드: AI + 배경 비교 (옆모습 손까지, 카메라를 옆에 둘 때 추천)</option>
       </select>
     </label>
     <div id="fastPanel" style="display:none; flex-direction:column; gap:10px">
@@ -81,6 +82,16 @@
     <label class="row"><input type="checkbox" id="enabled" checked> 에어 입력 보내기</label>
     <label><span>손 판정 여유: <span class="val" id="padVal"></span></span>
       <input type="range" id="pad" min="0" max="0.08" step="0.005">
+    </label>
+    <label class="row"><input type="checkbox" id="roiZoom"> 인식 범위 확대: 노란 범위만 잘라 크게 보여 줌 (옆모습·작은 손 인식률 향상)</label>
+    <label><span>팔까지 인식 (손 길이 배수, 0 = 손만): <span class="val" id="armVal"></span></span>
+      <input type="range" id="arm" min="0" max="2" step="0.1">
+    </label>
+    <label><span>손 놓침 유지 (프레임): <span class="val" id="coastVal"></span></span>
+      <input type="range" id="coast" min="0" max="8" step="1">
+    </label>
+    <label><span>추적 유지 신뢰도 (낮을수록 손이 돌아가도 덜 놓침): <span class="val" id="trackConfVal"></span></span>
+      <input type="range" id="trackConf" min="0.1" max="0.9" step="0.05">
     </label>
     <label><span>최소 인식 신뢰도: <span class="val" id="confVal"></span></span>
       <input type="range" id="conf" min="0.2" max="0.9" step="0.05">
@@ -124,7 +135,7 @@
 </main>
 <script type="module">
 import { FilesetResolver, HandLandmarker } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
-import { HandTracker, handSpan, beamsFromSpans, meanLuminance, lowLightLut, applyLut, boxBlur3, BackgroundModel, judgeBand, adaptBand, motionBand } from "./camera-core.js";
+import { HandTracker, handSpan, armPoints, beamsFromSpans, meanLuminance, lowLightLut, applyLut, boxBlur3, BackgroundModel, judgeBand, adaptBand, motionBand } from "./camera-core.js";
 
 const WASM_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
 const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
@@ -139,7 +150,7 @@ const video = $("video"), canvas = $("view"), ctx = canvas.getContext("2d");
 const MIN_GAP = 0.01;
 const evenBeams = (bottom, top) => Array.from({ length: BEAMS }, (_, i) => bottom + (top - bottom) * (i / (BEAMS - 1)));
 // beams[i] = normalized height of beam i+1 (index 0 = lowest beam, larger y = lower on screen)
-const DEFAULTS = { beams: evenBeams(0.85, 0.25), left: 0.05, right: 0.95, mirror: true, pad: 0.02, conf: 0.5, hold: 1, enabled: true, deviceId: "", interp: "smooth", maxHands: 2, fps: 120, res: "640x480", mode: "ai", thresh: 4, sens: 0.02, lowLight: "auto", motionAssist: true };
+const DEFAULTS = { beams: evenBeams(0.85, 0.25), left: 0.05, right: 0.95, mirror: true, pad: 0.02, conf: 0.5, hold: 1, enabled: true, deviceId: "", interp: "smooth", maxHands: 2, fps: 120, res: "640x480", mode: "ai", thresh: 4, sens: 0.02, lowLight: "auto", motionAssist: true, trackConf: 0.3, roiZoom: true, arm: 1.0, coast: 3 };
 let cfg = { ...DEFAULTS, beams: DEFAULTS.beams.slice() };
 try {
   const stored = JSON.parse(localStorage.getItem("cameraAir") || "{}");
@@ -163,10 +174,15 @@ for (let i = 0; i < BEAMS; i++) {
 function bindRange(id, key, fmt) {
   const el = $(id), out = $(id + "Val");
   el.value = cfg[key]; out.textContent = fmt(cfg[key]);
-  el.addEventListener("input", () => { cfg[key] = Number(el.value); out.textContent = fmt(cfg[key]); save(); if (key === "conf") applyConfidence(); if (key === "maxHands") applyMaxHands(); });
+  el.addEventListener("input", () => { cfg[key] = Number(el.value); out.textContent = fmt(cfg[key]); save(); if (key === "conf" || key === "trackConf") applyConfidence(); if (key === "coast") tracker.options.coastFrames = cfg.coast; if (key === "maxHands") applyMaxHands(); });
 }
 bindRange("pad", "pad", (v) => Math.round(v * 100) + "%");
 bindRange("conf", "conf", (v) => v.toFixed(2));
+bindRange("trackConf", "trackConf", (v) => v.toFixed(2));
+bindRange("arm", "arm", (v) => (v ? v.toFixed(1) + "배" : "끔"));
+bindRange("coast", "coast", (v) => v + "프레임");
+$("roiZoom").checked = cfg.roiZoom;
+$("roiZoom").addEventListener("change", () => { cfg.roiZoom = $("roiZoom").checked; save(); });
 bindRange("hold", "hold", (v) => v + "프레임");
 bindRange("maxHands", "maxHands", (v) => v + "개");
 bindRange("thresh", "thresh", (v) => String(v));
@@ -177,10 +193,11 @@ $("fps").addEventListener("change", () => { cfg.fps = Number($("fps").value); sa
 $("res").addEventListener("change", () => { cfg.res = $("res").value; save(); startCamera().catch(() => {}); });
 $("mode").value = cfg.mode;
 function applyMode() {
-  $("fastPanel").style.display = cfg.mode === "fast" ? "flex" : "none";
+  const usesBg = cfg.mode === "fast" || cfg.mode === "hybrid";
+  $("fastPanel").style.display = usesBg ? "flex" : "none";
   tracker.clear(); hands = []; spans = [];
-  if (cfg.mode === "fast" && !bgModel) requestBackground();
-  if (cfg.mode === "fast" && bgModel) setPill("modelState", "빠른 모드 준비됨", "ok");
+  if (usesBg && !bgModel) requestBackground();
+  if (usesBg && bgModel) setPill("modelState", "빠른 모드 준비됨", "ok");
   if (cfg.mode === "ai") setPill("modelState", modelLabel ? modelLabel[0] : "AI 모델 로딩 중…", modelLabel ? modelLabel[1] : "");
 }
 $("mode").addEventListener("change", () => { cfg.mode = $("mode").value; save(); applyMode(); });
@@ -287,7 +304,7 @@ async function startCamera() {
   $("camInfo").textContent = `카메라 설정: ${st.width}×${st.height} @ ${st.frameRate ? Math.round(st.frameRate) : "?"} fps` +
     (maxFps ? ` (이 카메라 최대 ${maxFps} fps)` : "") + (st.frameRate && st.frameRate < cfg.fps - 1 ? " - 요청한 프레임을 지원하지 않습니다" : "");
   bgModel = null; fastCanvas.width = 0;
-  if (cfg.mode === "fast") requestBackground();
+  if (cfg.mode === "fast" || cfg.mode === "hybrid") requestBackground();
   await startFrameReader(stream.getVideoTracks()[0]);
   await listCameras();
 }
@@ -299,7 +316,7 @@ async function loadModel() {
   const opts = (delegate) => ({
     baseOptions: { modelAssetPath: MODEL_URL, delegate },
     runningMode: "VIDEO", numHands: cfg.maxHands,
-    minHandDetectionConfidence: cfg.conf, minHandPresenceConfidence: cfg.conf, minTrackingConfidence: cfg.conf,
+    minHandDetectionConfidence: cfg.conf, minHandPresenceConfidence: cfg.trackConf, minTrackingConfidence: cfg.trackConf,
   });
   try { landmarker = await HandLandmarker.createFromOptions(files, opts("GPU")); modelLabel = ["AI 준비됨 (GPU)", "ok"]; }
   catch (e) { landmarker = await HandLandmarker.createFromOptions(files, opts("CPU")); modelLabel = ["AI 준비됨 (CPU)", "warn"]; }
@@ -309,7 +326,7 @@ function applyMaxHands() {
   if (landmarker) landmarker.setOptions({ numHands: cfg.maxHands }).catch(() => {});
 }
 function applyConfidence() {
-  if (landmarker) landmarker.setOptions({ minHandDetectionConfidence: cfg.conf, minHandPresenceConfidence: cfg.conf, minTrackingConfidence: cfg.conf }).catch(() => {});
+  if (landmarker) landmarker.setOptions({ minHandDetectionConfidence: cfg.conf, minHandPresenceConfidence: cfg.trackConf, minTrackingConfidence: cfg.trackConf }).catch(() => {});
 }
 
 // ---------- fast mode: background difference along each beam (no AI) ----------
@@ -318,7 +335,7 @@ function applyConfidence() {
 const fastCanvas = document.createElement("canvas");
 const fctx = fastCanvas.getContext("2d", { willReadFrequently: true });
 const FAST_WIDTH = 320, BAND = 1, BG_FRAMES = 15, FAST_NOISE_K = 2.5; // tuned with tools/airbench
-let bgModel = null, bgPending = null, bgCapture = 0, fastHits = [];
+let bgModel = null, bgPending = null, bgCapture = 0, fastHits = [], fastRaw = new Array(BEAMS).fill(false), fastAt = 0;
 function requestBackground() { bgCapture = BG_FRAMES; bgPending = null; bgModel = null; setPill("modelState", "배경 저장 중… 손을 치워 주세요", "warn"); }
 function prepareFastCanvas(source, sw, sh) {
   const fw = FAST_WIDTH, fh = Math.max(1, Math.round(FAST_WIDTH * sh / sw));
@@ -360,7 +377,8 @@ function fastFrame(source, sw, sh) {
     for (let c = 0; c < res.changed.length; c++) if (res.changed[c]) { const rx = (x0 + c + 0.5) / fw; hits.push(cfg.mirror ? 1 - rx : rx); }
     fastHits.push(hits);
   }
-  applyBeams(raw);
+  fastRaw = raw; fastAt = performance.now();
+  if (cfg.mode === "fast") applyBeams(raw);
 }
 
 // ---------- motion assist for the AI ----------
@@ -397,17 +415,39 @@ const probeCtx = probeCanvas.getContext("2d", { willReadFrequently: true });
 const lowCanvas = document.createElement("canvas");
 const lowCtx = lowCanvas.getContext("2d", { willReadFrequently: true });
 let lowGain = 1;
+// Horizontal crop to the yellow ROI (+3% margin), scaled up to 2x: hands fill more of the detector's input.
+// Benchmark (tools/airbench side-view test): side-on hands 39% -> 100% found, fast flicks 32% -> 52%.
+// The full height is kept so a hand raised above the beams stays visible and tracked.
+const cropCanvas = document.createElement("canvas");
+const cropCtx = cropCanvas.getContext("2d", { willReadFrequently: true });
+let aiCrop = { x0: 0, x1: 1 }; // raw (un-mirrored) x range of the last AI input, for mapping landmarks back
 function aiInput(source, sw, sh) {
   lowGain = 1;
-  if (cfg.lowLight === "off") return source;
-  probeCtx.drawImage(source, 0, 0, 32, 24);
-  const l = lowLightLut(meanLuminance(probeCtx.getImageData(0, 0, 32, 24).data, 1));
-  if (!l) return source;
+  aiCrop = { x0: 0, x1: 1 };
+  let sx = 0, cw = sw;
+  if (cfg.roiZoom) {
+    const dx0 = Math.min(cfg.left, cfg.right), dx1 = Math.max(cfg.left, cfg.right);
+    const rx0 = Math.max(0, (cfg.mirror ? 1 - dx1 : dx0) - 0.03), rx1 = Math.min(1, (cfg.mirror ? 1 - dx0 : dx1) + 0.03);
+    if (rx1 - rx0 < 0.9) { aiCrop = { x0: rx0, x1: rx1 }; sx = Math.round(rx0 * sw); cw = Math.max(1, Math.round((rx1 - rx0) * sw)); }
+  }
+  let l = null;
+  if (cfg.lowLight !== "off") {
+    probeCtx.drawImage(source, sx, 0, cw, sh, 0, 0, 32, 24);
+    l = lowLightLut(meanLuminance(probeCtx.getImageData(0, 0, 32, 24).data, 1));
+  }
+  if (!l && cw === sw) return source;
+  if (!l) {
+    const scale = Math.min(2, 640 / Math.max(cw, sh));
+    const ow = Math.max(1, Math.round(cw * scale)), oh = Math.max(1, Math.round(sh * scale));
+    if (cropCanvas.width !== ow || cropCanvas.height !== oh) { cropCanvas.width = ow; cropCanvas.height = oh; }
+    cropCtx.drawImage(source, sx, 0, cw, sh, 0, 0, ow, oh);
+    return cropCanvas;
+  }
   // dark: half resolution + light blur removes most sensor noise before brightening (benchmark: 0% -> 100% hands found)
-  const hw = Math.max(1, sw >> 1), hh = Math.max(1, sh >> 1);
+  const hw = Math.max(1, cw >> 1), hh = Math.max(1, sh >> 1);
   if (lowCanvas.width !== hw || lowCanvas.height !== hh) { lowCanvas.width = hw; lowCanvas.height = hh; }
   lowCtx.imageSmoothingQuality = "high";
-  lowCtx.drawImage(source, 0, 0, hw, hh);
+  lowCtx.drawImage(source, sx, 0, cw, sh, 0, 0, hw, hh);
   const img = lowCtx.getImageData(0, 0, hw, hh);
   boxBlur3(img.data, hw, hh);
   applyLut(img.data, l.lut);
@@ -418,15 +458,20 @@ function aiInput(source, sw, sh) {
 // ---------- detection (camera frames) ----------
 // Each detection stores, per tracked hand, the vertical span of its landmarks inside the ROI.
 // Rendering/evaluation runs every display frame and interpolates that span between camera frames.
-let lastVideoTime = -1, hands = [], detections = 0, renders = 0, fpsAt = performance.now(), fps = 0, hz = 0, inferMs = 0;
+let lastVideoTime = -1, hands = [], arms = [], detections = 0, renders = 0, fpsAt = performance.now(), fps = 0, hz = 0, inferMs = 0;
 // Tracking, sweep (beams crossed between frames) and coasting (short detector misses) live in camera-core.js.
-const tracker = new HandTracker({ sweep: true, coastFrames: 2 });
+const tracker = new HandTracker({ sweep: true, coastFrames: cfg.coast });
 const pending = new Array(BEAMS).fill(0); // debounce counters for applyBeams
 
 function onDetection(result, t) {
-  hands = (result.landmarks || []).map((pts) => pts.map((p) => ({ x: cfg.mirror ? 1 - p.x : p.x, y: p.y })));
+  const { x0, x1 } = aiCrop;
+  hands = (result.landmarks || []).map((pts) => pts.map((p) => { const rx = x0 + p.x * (x1 - x0); return { x: cfg.mirror ? 1 - rx : rx, y: p.y }; }));
+  arms = hands.map((pts) => armPoints(pts, cfg.arm));
   const samples = [];
-  for (const pts of hands) { const sp = handSpan(pts, cfg.left, cfg.right); if (sp) samples.push(sp); }
+  hands.forEach((pts, i) => {
+    const sp = handSpan(pts.concat(arms[i]), cfg.left, cfg.right);
+    if (sp) { const hc = handSpan(pts, 0, 1); if (hc) { sp.cx = hc.cx; sp.cy = hc.cy; } samples.push(sp); } // track by the hand, judge with the arm
+  });
   tracker.update(samples, t);
   lastDetectAt = t;
   detections++;
@@ -438,6 +483,7 @@ let camFrames = 0, camFps = 0, frameMode = "video", frameReader = null, readerGe
 function processFrame(source, sw, sh) {
   camFrames++;
   const t0 = performance.now();
+  if (cfg.mode === "hybrid") fastFrame(source, sw, sh);
   if (cfg.mode === "fast") {
     fastFrame(source, sw, sh);
     inferMs = inferMs * 0.9 + (performance.now() - t0) * 0.1;
@@ -492,6 +538,7 @@ function evaluate(now) {
   spans = tracker.spansAt(now, cfg.interp);
   const raw = beamsFromSpans(spans, cfg.beams, cfg.pad);
   if (cfg.motionAssist && now - motionAt < tracker.frameInterval * 1.5) for (let i = 0; i < BEAMS; i++) raw[i] = raw[i] || motionRaw[i];
+  if (cfg.mode === "hybrid" && bgModel && now - fastAt < 200) for (let i = 0; i < BEAMS; i++) raw[i] = raw[i] || fastRaw[i];
   applyBeams(raw);
 }
 
@@ -518,6 +565,15 @@ function draw() {
     ctx.stroke();
     for (const p of pts) { ctx.beginPath(); ctx.arc(p.x * w, p.y * h, 3, 0, Math.PI * 2); ctx.fill(); }
   }
+  // forearm extension used for judging
+  ctx.strokeStyle = "rgba(255, 180, 84, 0.8)"; ctx.lineWidth = 6; ctx.lineCap = "round";
+  hands.forEach((pts, i) => { const a = arms[i]; if (!a || !a.length) return; ctx.beginPath(); ctx.moveTo(pts[0].x * w, pts[0].y * h); ctx.lineTo(a[a.length - 1].x * w, a[a.length - 1].y * h); ctx.stroke(); });
+  ctx.lineCap = "butt";
+  // AI input crop (when zoom is on)
+  if (cfg.mode !== "fast" && aiCrop.x1 - aiCrop.x0 < 1) {
+    const cx0 = (cfg.mirror ? 1 - aiCrop.x1 : aiCrop.x0) * w, cx1 = (cfg.mirror ? 1 - aiCrop.x0 : aiCrop.x1) * w;
+    ctx.fillStyle = "rgba(0, 0, 0, 0.35)"; ctx.fillRect(0, 0, cx0, h); ctx.fillRect(cx1, 0, w - cx1, h);
+  }
   // ROI
   const xMin = Math.min(cfg.left, cfg.right) * w, xMax = Math.max(cfg.left, cfg.right) * w;
   ctx.strokeStyle = "#ffb454"; ctx.setLineDash([6, 6]);
@@ -527,7 +583,7 @@ function draw() {
   ctx.fillStyle = "rgba(0, 220, 255, 0.55)";
   for (const sp of spans) ctx.fillRect(xMax - 14, (sp.minY - cfg.pad) * h, 10, (sp.maxY - sp.minY + cfg.pad * 2) * h);
   // fast mode: pixels that differ from the background on each beam
-  if (cfg.mode === "fast") {
+  if (cfg.mode === "fast" || cfg.mode === "hybrid") {
     ctx.fillStyle = "rgba(255, 60, 60, 0.9)";
     fastHits.forEach((hits, i) => { const y = cfg.beams[i] * h; for (const x of hits) ctx.fillRect(x * w - 1, y - 4, 2, 8); });
   }
@@ -542,7 +598,7 @@ function draw() {
 }
 
 function renderLoop(now) {
-  if (cfg.mode === "ai" && landmarker) evaluate(now);
+  if ((cfg.mode === "ai" || cfg.mode === "hybrid") && landmarker) evaluate(now);
   draw();
   renders++;
   if (now - fpsAt >= 1000) {

@@ -22,6 +22,21 @@ export function handSpan(pts, left, right) {
 }
 
 /**
+ * Points along the forearm below a hand (from the wrist, away from the knuckles), so the span covers the arm
+ * like the cabinet's IR beams do: a raised hand keeps the lower beams blocked by the forearm.
+ * lengthFactor is in hand lengths (wrist to middle fingertip ~ 1.9 x wrist-to-middle-knuckle).
+ */
+export function armPoints(pts, lengthFactor) {
+  if (!lengthFactor || pts.length < 10) return [];
+  const w = pts[0], k = pts[9];
+  const dx = w.x - k.x, dy = w.y - k.y, d = Math.hypot(dx, dy);
+  if (d < 1e-4) return [];
+  const len = d * 1.9 * lengthFactor, ux = dx / d, uy = dy / d, out = [];
+  for (let i = 1; i <= 4; i++) out.push({ x: w.x + ux * len * i / 4, y: w.y + uy * len * i / 4 });
+  return out;
+}
+
+/**
  * Tracks up to N hands across camera frames by nearest centre, and produces the spans used for judging.
  *  - sweep: a fast hand can jump past a beam between two frames; like a real IR curtain, every beam the
  *    hand passed through since the previous frame counts as broken for this frame.
@@ -240,8 +255,17 @@ export function judgeBand(band, bgMean, bgStd, rows, stride, x0, x1, params) {
   }
   let offset = 0;
   if (params.driftCompensation !== false) {
-    const sorted = Array.from(diff).sort((a, b) => a - b);
-    offset = sorted[w >> 1];
+    // Global lighting/exposure drift = median signed difference over the WHOLE band width (not just the ROI),
+    // capped: when hands and arms cover most of a narrow ROI, the ROI median is the hand, not the lighting.
+    const all = new Float32Array(stride);
+    for (let c = 0; c < stride; c++) {
+      let d = 0;
+      for (let r = 0; r < rows; r++) { const j = r * stride + c; d += band[j] - bgMean[j]; }
+      all[c] = d / rows;
+    }
+    all.sort();
+    const cap = params.maxDrift ?? 12;
+    offset = Math.max(-cap, Math.min(cap, all[stride >> 1]));
   }
   const changed = new Uint8Array(w);
   for (let c = 0; c < w; c++) {

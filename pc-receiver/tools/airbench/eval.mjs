@@ -122,11 +122,14 @@ for (const sc of meta.scenarios) {
   const bg = readNpy(path.join(dataDir, sc.light + ".bg.npy"));
   for (const [name, v] of Object.entries(AI_VARIANTS)) results.push({ scenario: sc.scenario, light: sc.light, variant: name, ...metrics(runAi(frames, v, bands), gtHand) });
   for (const [name, v] of Object.entries(FAST_VARIANTS)) results.push({ scenario: sc.scenario, light: sc.light, variant: name, ...metrics(runFast(bands, bg, v), gtMask) });
+  // hybrid = AI final OR fast final (camera.html "hybrid" mode); judged against the hand ground truth
+  const ai = runAi(frames, AI_VARIANTS["AI 최종(+모션보조)"], bands), fast = runFast(bands, bg, FAST_VARIANTS["빠른 최종"]);
+  results.push({ scenario: sc.scenario, light: sc.light, variant: "하이브리드(AI+빠른)", ...metrics(ai.map((r, f) => r.map((b, i) => b || fast[f][i])), gtHand) });
 }
 
 // ---------- report ----------
 const pct = (v) => (v * 100).toFixed(0).padStart(4) + "%";
-const variants = [...Object.keys(AI_VARIANTS), ...Object.keys(FAST_VARIANTS)];
+const variants = [...Object.keys(AI_VARIANTS), ...Object.keys(FAST_VARIANTS), "하이브리드(AI+빠른)"];
 const lights = [...new Set(meta.scenarios.map((s) => s.light))];
 const motion = (r) => !["empty", "idle_mid"].includes(r.scenario);
 console.log("Per light (motion scenarios: slow, flick6/4/3/2, two_hands). eventRecall = beam crossings caught; recall = frames; FP = false-positive frame rate incl. empty/idle");
