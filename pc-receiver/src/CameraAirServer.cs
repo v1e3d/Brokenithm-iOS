@@ -23,7 +23,7 @@ namespace BrokenithmLan
         // Beam order bottom-to-top mapped to shared-memory AIR bytes, matching Brokenithm-SwiftUI (airLanes = [4,5,2,3,0,1] top-to-bottom).
         internal static readonly int[] BeamToByte = { 1, 0, 3, 2, 5, 4 };
         private const byte Pressed = 128;
-        private const int StaleMs = 500;
+        private const int StaleMs = 1000; // 1 s: tolerates a slow AI (a few fps) or a hidden page sending once per frame
         private const int MaxHeaderBytes = 16384;
         private const string WebSocketGuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 

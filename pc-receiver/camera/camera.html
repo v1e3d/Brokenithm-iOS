@@ -288,7 +288,9 @@ let lastDetectAt = 0;
 function send(force) {
   if (!wsOpen) return;
   // If detection stalls (camera frozen, window throttled), report no AIR instead of repeating a stale state.
-  const fresh = performance.now() - lastDetectAt < 300;
+  // Fresh if a camera frame was judged recently. The limit grows with the measured frame interval, so a slow
+  // AI (a few fps on a weak PC) does not blink AIR off between its frames.
+  const fresh = performance.now() - lastDetectAt < Math.max(300, 2.5 * tracker.frameInterval);
   const msg = cfg.enabled && fresh ? beamState.map((b) => (b ? "1" : "0")).join("") : "000000";
   const now = performance.now();
   if (force || msg !== lastSent || now - lastSentAt >= HEARTBEAT_MS) {
@@ -539,6 +541,12 @@ function processFrame(source, sw, sh) {
     inferMs = inferMs * 0.9 + (performance.now() - t0) * 0.1;
     onDetection(result, t0);
   }
+  // When the window is hidden/covered the browser stops requestAnimationFrame (where judging normally runs)
+  // and throttles timers (the heartbeat), so judge and send from the camera frame instead. Frames keep
+  // arriving through MediaStreamTrackProcessor even while the page is hidden.
+  const now = performance.now();
+  if (cfg.mode !== "fast" && landmarker && (document.hidden || now - lastRenderAt > 100)) evaluate(now);
+  send(false);
 }
 
 // requestVideoFrameCallback runs at most once per screen refresh, so a 120 fps camera on a 60 Hz
@@ -654,7 +662,9 @@ function draw() {
   }
 }
 
+let lastRenderAt = 0;
 function renderLoop(now) {
+  lastRenderAt = now;
   if ((cfg.mode === "ai" || cfg.mode === "hybrid") && landmarker) evaluate(now);
   draw();
   renders++;
@@ -706,8 +716,17 @@ const endDrag = () => { if (dragging) { dragging = null; save(); } };
 canvas.addEventListener("pointerup", endDrag);
 canvas.addEventListener("pointercancel", endDrag);
 
+let pillBeforeHidden = null;
 document.addEventListener("visibilitychange", () => {
-  if (document.hidden) setPill("modelState", "창이 가려져 멈춤 - Start-Camera-Browser.cmd로 열어 주세요", "warn");
+  const el = $("modelState");
+  if (document.hidden) {
+    pillBeforeHidden = [el.textContent, el.className.replace("pill", "").trim()];
+    if (frameMode === "processor") setPill("modelState", "창이 가려짐 - 판정은 계속 동작 중", "ok");
+    else setPill("modelState", "창이 가려져 멈춤 - 이 브라우저는 백그라운드 처리를 지원하지 않음 (Chrome/Edge 사용)", "warn");
+  } else if (pillBeforeHidden) {
+    setPill("modelState", pillBeforeHidden[0], pillBeforeHidden[1]);
+    pillBeforeHidden = null;
+  }
 });
 
 (async () => {
