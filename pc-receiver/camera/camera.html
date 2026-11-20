@@ -122,13 +122,19 @@
         <button id="allUp">▲ 전체 위로</button><button id="allDown">▼ 전체 아래로</button>
         <button id="widen">간격 넓게</button><button id="narrow">간격 좁게</button>
         <button id="even">균등 배치</button><button id="reset">보정 초기화</button>
+        <button id="resetCrop" style="grid-column: span 2">인식 범위 자르기 해제 (화면 전체)</button>
+      </div>
+      <label class="row" style="margin-top:8px"><input type="checkbox" id="bgLinked"> 배경 비교 범위를 AI 범위와 같게</label>
+      <div class="btns" id="editRectRow" style="margin-top:6px">
+        <button id="editAi">AI 범위 편집 (주황)</button><button id="editBg">배경 범위 편집 (빨강)</button>
       </div>
     </div>
     <p class="help">
       <b>보정:</b> 화면의 <span style="color:#ff6b6b">빨간 선(빔 1)</span>을 슬라이더(iPad) 바로 위 높이로,
       <span style="color:#5aa9ff">파란 선(빔 6)</span>을 손을 가장 높이 올리는 높이로 끌어다 놓으세요.
       가운데 선(빔 2~5)도 하나씩 끌어서 높이를 바꿀 수 있습니다.
-      노란 세로선 두 개는 인식 범위입니다. 범위 밖의 손(몸, 얼굴 근처)은 무시합니다.<br>
+      <b>인식 범위 자르기:</b> 노란 점선 4개(좌·우·위·아래)를 끌어서 사각형으로 자르세요. 사각형 밖은 어둡게 표시되고 판정에서 빠지며, AI는 이 사각형만 잘라 확대해서 봅니다.
+      위쪽 선을 너무 내리면 손을 높이 올렸을 때 놓칠 수 있으니 손이 올라가는 높이보다 조금 위에 두세요.<br>
       <b>카메라 위치:</b> 슬라이더 옆이나 뒤쪽에서 손이 위아래로 움직이는 모습이 잘 보이게 두세요.
     </p>
   </aside>
@@ -150,7 +156,7 @@ const video = $("video"), canvas = $("view"), ctx = canvas.getContext("2d");
 const MIN_GAP = 0.01;
 const evenBeams = (bottom, top) => Array.from({ length: BEAMS }, (_, i) => bottom + (top - bottom) * (i / (BEAMS - 1)));
 // beams[i] = normalized height of beam i+1 (index 0 = lowest beam, larger y = lower on screen)
-const DEFAULTS = { beams: evenBeams(0.85, 0.25), left: 0.05, right: 0.95, mirror: true, pad: 0.02, conf: 0.5, hold: 1, enabled: true, deviceId: "", interp: "smooth", maxHands: 2, fps: 120, res: "640x480", mode: "ai", thresh: 4, sens: 0.02, lowLight: "auto", motionAssist: true, trackConf: 0.3, roiZoom: true, arm: 1.0, coast: 3 };
+const DEFAULTS = { beams: evenBeams(0.85, 0.25), left: 0.05, right: 0.95, cropTop: 0, cropBottom: 1, bgLinked: true, bgLeft: 0.05, bgRight: 0.95, bgTop: 0, bgBottom: 1, editRect: "ai", mirror: true, pad: 0.02, conf: 0.5, hold: 1, enabled: true, deviceId: "", interp: "smooth", maxHands: 2, fps: 120, res: "640x480", mode: "ai", thresh: 4, sens: 0.02, lowLight: "auto", motionAssist: true, trackConf: 0.3, roiZoom: true, arm: 1.0, coast: 3 };
 let cfg = { ...DEFAULTS, beams: DEFAULTS.beams.slice() };
 try {
   const stored = JSON.parse(localStorage.getItem("cameraAir") || "{}");
@@ -239,7 +245,32 @@ $("allDown").addEventListener("click", () => moveAll(0.02));
 $("widen").addEventListener("click", () => scaleSpan(1.1));
 $("narrow").addEventListener("click", () => scaleSpan(1 / 1.1));
 $("even").addEventListener("click", () => { cfg.beams = evenBeams(cfg.beams[0], cfg.beams[BEAMS - 1]); normalizeBeams(); save(); });
-$("reset").addEventListener("click", () => { cfg.beams = DEFAULTS.beams.slice(); cfg.left = DEFAULTS.left; cfg.right = DEFAULTS.right; normalizeBeams(); save(); });
+$("reset").addEventListener("click", () => { cfg.beams = DEFAULTS.beams.slice(); cfg.left = DEFAULTS.left; cfg.right = DEFAULTS.right; cfg.cropTop = DEFAULTS.cropTop; cfg.cropBottom = DEFAULTS.cropBottom; normalizeBeams(); save(); });
+$("resetCrop").addEventListener("click", () => {
+  if (!cfg.bgLinked && cfg.editRect === "bg") { cfg.bgLeft = 0; cfg.bgRight = 1; cfg.bgTop = 0; cfg.bgBottom = 1; }
+  else { cfg.left = 0; cfg.right = 1; cfg.cropTop = 0; cfg.cropBottom = 1; }
+  save();
+});
+function updateRectUi() {
+  $("bgLinked").checked = cfg.bgLinked;
+  $("editRectRow").style.display = cfg.bgLinked ? "none" : "grid";
+  $("editAi").style.borderColor = !cfg.bgLinked && cfg.editRect === "ai" ? "#ffb454" : "";
+  $("editBg").style.borderColor = !cfg.bgLinked && cfg.editRect === "bg" ? "#ff5a5a" : "";
+}
+$("bgLinked").addEventListener("change", () => {
+  cfg.bgLinked = $("bgLinked").checked;
+  if (!cfg.bgLinked) { cfg.bgLeft = cfg.left; cfg.bgRight = cfg.right; cfg.bgTop = cfg.cropTop; cfg.bgBottom = cfg.cropBottom; } // start from the AI rect
+  cfg.editRect = "ai"; save(); updateRectUi();
+});
+$("editAi").addEventListener("click", () => { cfg.editRect = "ai"; save(); updateRectUi(); });
+$("editBg").addEventListener("click", () => { cfg.editRect = "bg"; save(); updateRectUi(); });
+updateRectUi();
+/** Detection rectangle (displayed coordinates) for "ai" or "bg"; bg follows ai while linked. */
+function rectOf(kind) {
+  const bg = kind === "bg" && !cfg.bgLinked;
+  const l = bg ? cfg.bgLeft : cfg.left, r = bg ? cfg.bgRight : cfg.right, t = bg ? cfg.bgTop : cfg.cropTop, b = bg ? cfg.bgBottom : cfg.cropBottom;
+  return { left: Math.min(l, r), right: Math.max(l, r), top: Math.min(t, b), bottom: Math.max(t, b) };
+}
 normalizeBeams();
 
 // ---------- WebSocket to the bridge ----------
@@ -358,14 +389,15 @@ function fastFrame(source, sw, sh) {
     return;
   }
   if (!bgModel) return;
-  // ROI in raw (un-mirrored) camera coordinates
-  const dx0 = Math.min(cfg.left, cfg.right), dx1 = Math.max(cfg.left, cfg.right);
-  const rx0 = cfg.mirror ? 1 - dx1 : dx0, rx1 = cfg.mirror ? 1 - dx0 : dx1;
+  // background-difference rectangle, in raw (un-mirrored) camera coordinates
+  const bgr = rectOf("bg");
+  const rx0 = cfg.mirror ? 1 - bgr.right : bgr.left, rx1 = cfg.mirror ? 1 - bgr.left : bgr.right;
   const x0 = Math.max(0, Math.floor(rx0 * fw)), x1 = Math.min(fw, Math.ceil(rx1 * fw));
   const params = { thresh: cfg.thresh, sens: cfg.sens, noiseK: FAST_NOISE_K, smooth: 0 };
   const raw = new Array(BEAMS).fill(false);
   fastHits = [];
   for (let i = 0; i < BEAMS; i++) {
+    if (cfg.beams[i] < bgr.top || cfg.beams[i] > bgr.bottom) { fastHits.push([]); continue; } // outside the background rectangle
     const yc = Math.round(cfg.beams[i] * (fh - 1));
     const y0 = Math.max(0, yc - BAND), y1 = Math.min(fh - 1, yc + BAND), rows = y1 - y0 + 1;
     const band = toLuminance(fctx.getImageData(0, y0, fw, rows).data);
@@ -420,34 +452,46 @@ let lowGain = 1;
 // The full height is kept so a hand raised above the beams stays visible and tracked.
 const cropCanvas = document.createElement("canvas");
 const cropCtx = cropCanvas.getContext("2d", { willReadFrequently: true });
-let aiCrop = { x0: 0, x1: 1 }; // raw (un-mirrored) x range of the last AI input, for mapping landmarks back
+let aiCrop = { x0: 0, x1: 1, y0: 0, y1: 1 }; // raw (un-mirrored) rect of the last AI input, for mapping landmarks back
+/** User crop rectangle in raw (un-mirrored) camera coordinates. */
+function cropRect() {
+  const dx0 = Math.min(cfg.left, cfg.right), dx1 = Math.max(cfg.left, cfg.right);
+  const y0 = clamp01(Math.min(cfg.cropTop, cfg.cropBottom)), y1 = clamp01(Math.max(cfg.cropTop, cfg.cropBottom));
+  return { x0: cfg.mirror ? 1 - dx1 : dx0, x1: cfg.mirror ? 1 - dx0 : dx1, y0, y1 };
+}
 function aiInput(source, sw, sh) {
   lowGain = 1;
-  aiCrop = { x0: 0, x1: 1 };
-  let sx = 0, cw = sw;
+  aiCrop = { x0: 0, x1: 1, y0: 0, y1: 1 };
+  let sx = 0, cw = sw, sy = 0, ch = sh;
   if (cfg.roiZoom) {
-    const dx0 = Math.min(cfg.left, cfg.right), dx1 = Math.max(cfg.left, cfg.right);
-    const rx0 = Math.max(0, (cfg.mirror ? 1 - dx1 : dx0) - 0.03), rx1 = Math.min(1, (cfg.mirror ? 1 - dx0 : dx1) + 0.03);
-    if (rx1 - rx0 < 0.9) { aiCrop = { x0: rx0, x1: rx1 }; sx = Math.round(rx0 * sw); cw = Math.max(1, Math.round((rx1 - rx0) * sw)); }
+    const r = cropRect();
+    const rx0 = Math.max(0, r.x0 - 0.03), rx1 = Math.min(1, r.x1 + 0.03);
+    const ry0 = Math.max(0, r.y0 - 0.03), ry1 = Math.min(1, r.y1 + 0.03);
+    const cropX = rx1 - rx0 < 0.9, cropY = ry1 - ry0 < 0.9;
+    if (cropX || cropY) {
+      aiCrop = { x0: cropX ? rx0 : 0, x1: cropX ? rx1 : 1, y0: cropY ? ry0 : 0, y1: cropY ? ry1 : 1 };
+      sx = Math.round(aiCrop.x0 * sw); cw = Math.max(1, Math.round((aiCrop.x1 - aiCrop.x0) * sw));
+      sy = Math.round(aiCrop.y0 * sh); ch = Math.max(1, Math.round((aiCrop.y1 - aiCrop.y0) * sh));
+    }
   }
   let l = null;
   if (cfg.lowLight !== "off") {
-    probeCtx.drawImage(source, sx, 0, cw, sh, 0, 0, 32, 24);
+    probeCtx.drawImage(source, sx, sy, cw, ch, 0, 0, 32, 24);
     l = lowLightLut(meanLuminance(probeCtx.getImageData(0, 0, 32, 24).data, 1));
   }
-  if (!l && cw === sw) return source;
+  if (!l && cw === sw && ch === sh) return source;
   if (!l) {
-    const scale = Math.min(2, 640 / Math.max(cw, sh));
-    const ow = Math.max(1, Math.round(cw * scale)), oh = Math.max(1, Math.round(sh * scale));
+    const scale = Math.min(2, 640 / Math.max(cw, ch));
+    const ow = Math.max(1, Math.round(cw * scale)), oh = Math.max(1, Math.round(ch * scale));
     if (cropCanvas.width !== ow || cropCanvas.height !== oh) { cropCanvas.width = ow; cropCanvas.height = oh; }
-    cropCtx.drawImage(source, sx, 0, cw, sh, 0, 0, ow, oh);
+    cropCtx.drawImage(source, sx, sy, cw, ch, 0, 0, ow, oh);
     return cropCanvas;
   }
   // dark: half resolution + light blur removes most sensor noise before brightening (benchmark: 0% -> 100% hands found)
-  const hw = Math.max(1, cw >> 1), hh = Math.max(1, sh >> 1);
+  const hw = Math.max(1, cw >> 1), hh = Math.max(1, ch >> 1);
   if (lowCanvas.width !== hw || lowCanvas.height !== hh) { lowCanvas.width = hw; lowCanvas.height = hh; }
   lowCtx.imageSmoothingQuality = "high";
-  lowCtx.drawImage(source, sx, 0, cw, sh, 0, 0, hw, hh);
+  lowCtx.drawImage(source, sx, sy, cw, ch, 0, 0, hw, hh);
   const img = lowCtx.getImageData(0, 0, hw, hh);
   boxBlur3(img.data, hw, hh);
   applyLut(img.data, l.lut);
@@ -464,12 +508,13 @@ const tracker = new HandTracker({ sweep: true, coastFrames: cfg.coast });
 const pending = new Array(BEAMS).fill(0); // debounce counters for applyBeams
 
 function onDetection(result, t) {
-  const { x0, x1 } = aiCrop;
-  hands = (result.landmarks || []).map((pts) => pts.map((p) => { const rx = x0 + p.x * (x1 - x0); return { x: cfg.mirror ? 1 - rx : rx, y: p.y }; }));
+  const { x0, x1, y0, y1 } = aiCrop;
+  hands = (result.landmarks || []).map((pts) => pts.map((p) => { const rx = x0 + p.x * (x1 - x0); return { x: cfg.mirror ? 1 - rx : rx, y: y0 + p.y * (y1 - y0) }; }));
   arms = hands.map((pts) => armPoints(pts, cfg.arm));
   const samples = [];
   hands.forEach((pts, i) => {
-    const sp = handSpan(pts.concat(arms[i]), cfg.left, cfg.right);
+    const yMin = Math.min(cfg.cropTop, cfg.cropBottom), yMax = Math.max(cfg.cropTop, cfg.cropBottom);
+    const sp = handSpan(pts.concat(arms[i]).filter((q) => q.y >= yMin && q.y <= yMax), cfg.left, cfg.right);
     if (sp) { const hc = handSpan(pts, 0, 1); if (hc) { sp.cx = hc.cx; sp.cy = hc.cy; } samples.push(sp); } // track by the hand, judge with the arm
   });
   tracker.update(samples, t);
@@ -569,16 +614,28 @@ function draw() {
   ctx.strokeStyle = "rgba(255, 180, 84, 0.8)"; ctx.lineWidth = 6; ctx.lineCap = "round";
   hands.forEach((pts, i) => { const a = arms[i]; if (!a || !a.length) return; ctx.beginPath(); ctx.moveTo(pts[0].x * w, pts[0].y * h); ctx.lineTo(a[a.length - 1].x * w, a[a.length - 1].y * h); ctx.stroke(); });
   ctx.lineCap = "butt";
-  // AI input crop (when zoom is on)
-  if (cfg.mode !== "fast" && aiCrop.x1 - aiCrop.x0 < 1) {
-    const cx0 = (cfg.mirror ? 1 - aiCrop.x1 : aiCrop.x0) * w, cx1 = (cfg.mirror ? 1 - aiCrop.x0 : aiCrop.x1) * w;
-    ctx.fillStyle = "rgba(0, 0, 0, 0.35)"; ctx.fillRect(0, 0, cx0, h); ctx.fillRect(cx1, 0, w - cx1, h);
+  // detection rectangles: AI (orange) and background difference (red, when set separately)
+  const usesAi = cfg.mode !== "fast", usesBg = cfg.mode !== "ai";
+  const shown = [];
+  if (usesAi || cfg.bgLinked) shown.push(["ai", "#ffb454"]);
+  if (usesBg && !cfg.bgLinked) shown.push(["bg", "#ff5a5a"]);
+  // shade what no active rectangle covers
+  const union = shown.map(([k]) => rectOf(k)).reduce((u, r) => ({ left: Math.min(u.left, r.left), right: Math.max(u.right, r.right), top: Math.min(u.top, r.top), bottom: Math.max(u.bottom, r.bottom) }), { left: 1, right: 0, top: 1, bottom: 0 });
+  ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
+  const ux0 = union.left * w, ux1 = union.right * w, uy0 = union.top * h, uy1 = union.bottom * h;
+  ctx.fillRect(0, 0, w, uy0); ctx.fillRect(0, uy1, w, h - uy1); ctx.fillRect(0, uy0, ux0, uy1 - uy0); ctx.fillRect(ux1, uy0, w - ux1, uy1 - uy0);
+  for (const [kind, color] of shown) {
+    const r = rectOf(kind), editing = cfg.bgLinked ? kind === "ai" : cfg.editRect === kind;
+    const rx = r.left * w, rw = (r.right - r.left) * w, ry = r.top * h, rh = (r.bottom - r.top) * h;
+    ctx.strokeStyle = color; ctx.lineWidth = editing ? 2.5 : 1.5; ctx.setLineDash(editing ? [6, 6] : [3, 6]);
+    ctx.strokeRect(rx, ry, rw, rh);
+    ctx.setLineDash([]);
+    if (editing) {
+      ctx.fillStyle = color;
+      for (const [hx, hy] of [[rx, ry + rh / 2], [rx + rw, ry + rh / 2], [rx + rw / 2, ry], [rx + rw / 2, ry + rh]]) ctx.fillRect(hx - 5, hy - 5, 10, 10);
+    }
   }
-  // ROI
   const xMin = Math.min(cfg.left, cfg.right) * w, xMax = Math.max(cfg.left, cfg.right) * w;
-  ctx.strokeStyle = "#ffb454"; ctx.setLineDash([6, 6]);
-  for (const x of [cfg.left, cfg.right]) { ctx.beginPath(); ctx.moveTo(x * w, 0); ctx.lineTo(x * w, h); ctx.stroke(); }
-  ctx.setLineDash([]);
   // interpolated hand spans used for judging (cyan bars at the right edge of the ROI)
   ctx.fillStyle = "rgba(0, 220, 255, 0.55)";
   for (const sp of spans) ctx.fillRect(xMax - 14, (sp.minY - cfg.pad) * h, 10, (sp.maxY - sp.minY + cfg.pad * 2) * h);
@@ -617,17 +674,27 @@ function renderLoop(now) {
 // ---------- drag calibration lines ----------
 let dragging = null;
 function pointer(e) { const r = canvas.getBoundingClientRect(); return { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height }; }
+/** Draggable edges of the rectangle being edited: [cfg key, distance to the pointer]. */
+let lastPointer = { x: 0, y: 0 };
+function rectHandles() {
+  const p = lastPointer, bg = !cfg.bgLinked && cfg.editRect === "bg";
+  const keys = bg ? ["bgLeft", "bgRight", "bgTop", "bgBottom"] : ["left", "right", "cropTop", "cropBottom"];
+  return [[keys[0], Math.abs(p.x - cfg[keys[0]])], [keys[1], Math.abs(p.x - cfg[keys[1]])],
+          [keys[2], Math.abs(p.y - cfg[keys[2]]) * 1.2], [keys[3], Math.abs(p.y - cfg[keys[3]]) * 1.2]];
+}
 canvas.addEventListener("pointerdown", (e) => {
+  lastPointer = pointer(e);
   const p = pointer(e), tol = e.pointerType === "touch" ? 0.05 : 0.03;
   const candidates = cfg.beams.map((y, i) => ["beam" + i, Math.abs(p.y - y)])
-    .concat([["left", Math.abs(p.x - cfg.left)], ["right", Math.abs(p.x - cfg.right)]])
+    .concat(rectHandles().map(([key, d]) => [key, d])) // rectangle edges; beams win ties
     .filter(([, d]) => d < tol).sort((a, b) => a[1] - b[1]);
   if (candidates.length) { dragging = candidates[0][0]; canvas.setPointerCapture(e.pointerId); e.preventDefault(); }
 });
 canvas.addEventListener("pointermove", (e) => {
   if (!dragging) return;
   const p = pointer(e);
-  if (dragging === "left" || dragging === "right") { cfg[dragging] = clamp01(p.x); return; }
+  if (dragging === "left" || dragging === "right" || dragging === "bgLeft" || dragging === "bgRight") { cfg[dragging] = clamp01(p.x); return; }
+  if (dragging === "cropTop" || dragging === "cropBottom" || dragging === "bgTop" || dragging === "bgBottom") { cfg[dragging] = clamp01(p.y); return; }
   const i = Number(dragging.slice(4));
   // Each beam moves on its own but stays between its neighbours.
   const lower = i === 0 ? 1 : cfg.beams[i - 1] - MIN_GAP;

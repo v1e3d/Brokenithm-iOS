@@ -13,6 +13,7 @@ struct ContentView: View {
     @State var drawerOpen: Bool = false
     @State var sheetShowing: Bool = false
     @State var settingsShowing: Bool = false
+    @State var calibrating: Bool = false
     @AppStorage("airOn") var airOn: Bool = false
     // Layout and judging settings (edited in SettingsView)
     @AppStorage("airHeightRatio") var airHeightRatio: Double = LayoutDefaults.airHeightRatio
@@ -61,6 +62,9 @@ struct ContentView: View {
                         Button("Settings", systemImage: "slider.horizontal.3") {
                             settingsShowing = true
                         }
+                        Button("Calibrate by Touch", systemImage: "hand.tap") {
+                            calibrating = true
+                        }
                         Button("Restart Connection", systemImage: "arrow.clockwise") {
                             try? connection?.restart()
                         }
@@ -91,6 +95,11 @@ struct ContentView: View {
                                sliderOptions: sliderOptions,
                                showTouches: showTouches, showRowDivider: showRowDivider,
                                ledBrightness: ledBrightness)
+                    .overlay {
+                        if calibrating {
+                            CalibrationOverlay(isActive: $calibrating, airOn: airOn)
+                        }
+                    }
             }
         }
         .ignoresSafeArea(edges: [.bottom])
@@ -109,7 +118,7 @@ struct ContentView: View {
             }
         }
         .sheet(isPresented: $sheetShowing, content: { AboutView(isPresented: $sheetShowing).presentationDragIndicator(.visible) })
-        .sheet(isPresented: $settingsShowing, content: { SettingsView(isPresented: $settingsShowing).presentationDragIndicator(.visible) })
+        .sheet(isPresented: $settingsShowing, content: { SettingsView(isPresented: $settingsShowing, onCalibrate: { calibrating = true }).presentationDragIndicator(.visible) })
         
     }
 }
