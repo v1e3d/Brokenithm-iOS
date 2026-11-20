@@ -14,22 +14,42 @@ struct InputBoardView: View {
     @State var airTouching: [UInt8] = Array(repeating: 0, count: 6)
     @Binding var connection: Listener?
     @Binding var airOn: Bool
-    @Binding var airOption: String
-    var splitRows: Bool = true
-    var edgeAssist: Bool = true
+    /// Air area height as a fraction of the board height.
+    var airHeightRatio: Double = LayoutDefaults.airHeightRatio
+    /// Dead band between the air area and the slider (fraction of the board height); touches there send nothing.
+    var airGapRatio: Double = LayoutDefaults.airGapRatio
+    var sliderOptions = SliderMapping.Options()
+    var showTouches: Bool = true
+    var showRowDivider: Bool = true
+    var ledBrightness: Double = LayoutDefaults.ledBrightness
 
     var body: some View {
         GeometryReader { proxy in
-            let airHeight = proxy.size.height / (airOption == "Normal" ? 3 : airOption == "Small" ? 4.5 : 2)
-            let airBlockHeight = airHeight / 6
-            let sliderTop: CGFloat = airOn ? airHeight : 0
+            let airHeight: CGFloat = airOn ? proxy.size.height * CGFloat(min(max(airHeightRatio, 0.05), 0.8)) : 0
+            let gap: CGFloat = airOn ? proxy.size.height * CGFloat(min(max(airGapRatio, 0), 0.3)) : 0
+            let airBlockHeight = max(airHeight / 6, 1)
+            let sliderTop = airHeight + gap
+            let sliderHeight = max(proxy.size.height - sliderTop, 1)
             VStack(spacing: 0) {
                 if airOn {
                     AirInputView(size: airHeight, airTouching: $airTouching, connection: $connection)
+                    if gap > 0 {
+                        Rectangle()
+                            .fill(Color.black)
+                            .frame(height: gap)
+                            .overlay(alignment: .center) {
+                                Rectangle().fill(Color.white.opacity(0.08)).frame(height: 1)
+                            }
+                    }
                 }
-                SliderView(lanesTouching: $lanesTouching, connection: $connection, airOn: airOn, splitRows: splitRows)
+                HStack(spacing: 0) {
+                    Color.black.frame(width: proxy.size.width * CGFloat(min(max(sliderOptions.insetLeft, 0), 0.4)))
+                    SliderView(lanesTouching: $lanesTouching, connection: $connection, airOn: airOn,
+                               splitRows: sliderOptions.splitRows, splitRatio: sliderOptions.splitRatio,
+                               showTouches: showTouches, showRowDivider: showRowDivider, ledBrightness: ledBrightness)
+                    Color.black.frame(width: proxy.size.width * CGFloat(min(max(sliderOptions.insetRight, 0), 0.4)))
+                }
             }
-            .sensoryFeedback(.success, trigger: airOption)
             .gesture(
                 SpatialEventGesture()
                     .onChanged { events in
@@ -41,19 +61,18 @@ struct InputBoardView: View {
                         for event in events where event.phase == .active {
                             let x = event.location.x
                             let y = event.location.y
-                            if (y < airHeight && airOn) || y < 0 {
-                                if airOn, y > 0 {
-                                    setAir(&air, block: Int(y / airBlockHeight))
-                                }
-                            } else {
+                            if y < 0 { continue }
+                            if airOn && y < airHeight {
+                                setAir(&air, block: Int(y / airBlockHeight))
+                            } else if y >= sliderTop {
                                 sliderTouches.append(SliderMapping.Touch(x: Double(x), y: Double(y - sliderTop)))
                             }
+                            // touches in the dead band are ignored
                         }
-                        let options = SliderMapping.Options(splitRows: splitRows, edgeAssist: edgeAssist)
                         let lanes = SliderMapping.sensors(for: sliderTouches,
                                                           width: Double(proxy.size.width),
-                                                          height: Double(proxy.size.height - sliderTop),
-                                                          options: options)
+                                                          height: Double(sliderHeight),
+                                                          options: sliderOptions)
                         update(lanes: lanes, air: air)
                     }
                     .onEnded { _ in
@@ -80,5 +99,5 @@ struct InputBoardView: View {
 }
 
 #Preview {
-    InputBoardView(connection: .constant(nil), airOn: .constant(true), airOption: .constant("Normal"))
+    InputBoardView(connection: .constant(nil), airOn: .constant(true))
 }

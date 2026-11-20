@@ -22,15 +22,22 @@ enum SliderMapping {
     static let keys = 16
     static let sensors = 32
     static let pressed: UInt8 = 128
-    /// Touches this close to a key's side edge (fraction of the key width) also press the neighbouring key,
-    /// like a fingertip lying across the gap between two keys on the cabinet.
-    static let edgeFraction = 0.25
+    /// Default edge assist width: touches this close to a key's side edge (fraction of the key width) also
+    /// press the neighbouring key, like a fingertip lying across the gap between two keys on the cabinet.
+    static let defaultEdgeFraction = 0.25
 
     struct Options: Equatable {
         /// Split every key into a top and a bottom sensor by touch height (like the cabinet).
         var splitRows: Bool = true
         /// Also press the neighbouring key when touching near a key edge.
         var edgeAssist: Bool = true
+        /// Edge assist width as a fraction of the key width (0...0.45).
+        var edgeFraction: Double = SliderMapping.defaultEdgeFraction
+        /// Height of the top row as a fraction of the slider height (0.1...0.9); the rest is the bottom row.
+        var splitRatio: Double = 0.5
+        /// Fractions of the slider width left and right that are not keys (touches there count as the edge key).
+        var insetLeft: Double = 0
+        var insetRight: Double = 0
     }
 
     struct Touch: Equatable {
@@ -45,20 +52,24 @@ enum SliderMapping {
     static func sensors(for touches: [Touch], width: Double, height: Double, options: Options) -> [UInt8] {
         var out = [UInt8](repeating: 0, count: sensors)
         guard width > 0, height > 0 else { return out }
-        let keyWidth = width / Double(keys)
+        let left = width * min(max(options.insetLeft, 0), 0.4)
+        let usable = max(width * (1 - min(max(options.insetLeft, 0), 0.4) - min(max(options.insetRight, 0), 0.4)), 1)
+        let keyWidth = usable / Double(keys)
+        let edge = min(max(options.edgeFraction, 0), 0.45)
+        let splitY = height * min(max(options.splitRatio, 0.1), 0.9)
         // Unsplit mode: count touches per key; the 2nd touch on a key uses the 2nd sensor.
         var touchesPerKey = [Int](repeating: 0, count: keys)
 
         for touch in touches {
-            let position = min(max(touch.x / keyWidth, 0), Double(keys) - 0.000_001)
+            let position = min(max((touch.x - left) / keyWidth, 0), Double(keys) - 0.000_001)
             let column = Int(position)            // 0 = leftmost key
             let fraction = position - Double(column)
-            let top = touch.y < height / 2
+            let top = touch.y < splitY
 
             var columns = [column]
-            if options.edgeAssist {
-                if fraction < edgeFraction && column > 0 { columns.append(column - 1) }
-                if fraction > 1 - edgeFraction && column < keys - 1 { columns.append(column + 1) }
+            if options.edgeAssist && edge > 0 {
+                if fraction < edge && column > 0 { columns.append(column - 1) }
+                if fraction > 1 - edge && column < keys - 1 { columns.append(column + 1) }
             }
             for c in columns {
                 let key = keys - 1 - c            // counted from the right, as the game numbers sensors

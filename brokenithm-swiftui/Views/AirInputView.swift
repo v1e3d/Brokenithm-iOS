@@ -23,7 +23,7 @@ struct AirInputView: View {
                 }
             }
         }
-        .frame(maxHeight: size)
+        .frame(height: size)
     }
 }
 

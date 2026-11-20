@@ -64,4 +64,24 @@ check(pressedIndices(SliderMapping.sensors(for: [SliderMapping.Touch(x: W + 50, 
 check(pressedIndices(SliderMapping.sensors(for: [touch(column: 3, top: true)], width: 0, height: H, options: split)).isEmpty, "zero width yields nothing")
 check(SliderMapping.sensors(for: [], width: W, height: H, options: split).count == 32, "always 32 sensors")
 
+// Custom split height: with the boundary at 30%, a touch at 40% height is in the bottom row.
+var custom = SliderMapping.Options(splitRows: true, edgeAssist: false)
+custom.splitRatio = 0.3
+check(pressedIndices(SliderMapping.sensors(for: [SliderMapping.Touch(x: 7.5 * key, y: H * 0.4)], width: W, height: H, options: custom)) == [17], "split at 30%: 40% height is bottom row")
+check(pressedIndices(SliderMapping.sensors(for: [SliderMapping.Touch(x: 7.5 * key, y: H * 0.2)], width: W, height: H, options: custom)) == [16], "split at 30%: 20% height is top row")
+
+// Insets: keys only span the inner width; touches in the margins count as the edge keys.
+var inset = SliderMapping.Options(splitRows: true, edgeAssist: false)
+inset.insetLeft = 0.1; inset.insetRight = 0.1
+let innerKey = W * 0.8 / 16
+check(pressedIndices(SliderMapping.sensors(for: [SliderMapping.Touch(x: W * 0.1 + innerKey * 0.5, y: 10)], width: W, height: H, options: inset)) == [30], "inset: first inner key is the leftmost key")
+check(pressedIndices(SliderMapping.sensors(for: [SliderMapping.Touch(x: W * 0.05, y: 10)], width: W, height: H, options: inset)) == [30], "inset: left margin clamps to the leftmost key")
+check(pressedIndices(SliderMapping.sensors(for: [SliderMapping.Touch(x: W * 0.9 - innerKey * 0.5, y: 10)], width: W, height: H, options: inset)) == [0], "inset: last inner key is the rightmost key")
+
+// Edge assist width: 0 disables it, 0.4 widens it.
+var narrow = SliderMapping.Options(splitRows: true, edgeAssist: true); narrow.edgeFraction = 0
+check(pressedIndices(SliderMapping.sensors(for: [touch(column: 5, top: true, at: 0.95)], width: W, height: H, options: narrow)).count == 1, "edge width 0 disables assist")
+var wide = SliderMapping.Options(splitRows: true, edgeAssist: true); wide.edgeFraction = 0.4
+check(pressedIndices(SliderMapping.sensors(for: [touch(column: 5, top: true, at: 0.65)], width: W, height: H, options: wide)).count == 2, "edge width 0.4 reaches 65% of the key")
+
 if failures == 0 { print("All SliderMapping tests passed.") } else { print("\(failures) failure(s)."); exit(1) }

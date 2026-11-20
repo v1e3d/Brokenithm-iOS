@@ -54,6 +54,9 @@ This build sends the same layout:
   the lower half its bottom sensor. A TAP that lands on top of a HOLD in the same lane is played by
   holding one half and tapping the other, as on the cabinet.
 - **Edge Assist** (on by default): a touch within 1/4 key of an edge also presses the neighbouring key.
+- **Settings** (menu -> Settings): top/bottom boundary height, edge assist width, left/right margins
+  (keys only span the inner area), air area height, a dead band between air and slider, touch highlight,
+  row divider and LED brightness. Everything is saved and has a reset button.
 - Every change sends one complete state built from all fingers, so a held finger never flickers off
   when another finger moves, lifts or touches the air area.
 

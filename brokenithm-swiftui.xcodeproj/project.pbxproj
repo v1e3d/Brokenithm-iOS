@@ -15,6 +15,7 @@
 		1E5B24702C822AB40009640E /* Preview Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 1E5B24662C822AB40009640E /* Preview Assets.xcassets */; };
 		1E5B24712C822AB40009640E /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 1E5B246A2C822AB40009640E /* Assets.xcassets */; };
 		1EAE27952C91F785007E178F /* SliderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1EAE27942C91F785007E178F /* SliderView.swift */; };
+		1EF1A0052F00000100A1B2C3 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1EF1A0042F00000100A1B2C3 /* SettingsView.swift */; };
 		1EAE27972C91F976007E178F /* AirInputView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1EAE27962C91F976007E178F /* AirInputView.swift */; };
 		1EAE27992C9246B4007E178F /* InputBoardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1EAE27982C9246B4007E178F /* InputBoardView.swift */; };
 		1EEC05AB2C977581001DAA1D /* AboutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1EEC05AA2C977581001DAA1D /* AboutView.swift */; };
@@ -30,6 +31,7 @@
 		1E5B246A2C822AB40009640E /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		1E5B246B2C822AB40009640E /* brokenithm_swiftuiApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = brokenithm_swiftuiApp.swift; sourceTree = "<group>"; };
 		1EAE27942C91F785007E178F /* SliderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SliderView.swift; sourceTree = "<group>"; };
+		1EF1A0042F00000100A1B2C3 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		1EAE27962C91F976007E178F /* AirInputView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AirInputView.swift; sourceTree = "<group>"; };
 		1EAE27982C9246B4007E178F /* InputBoardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InputBoardView.swift; sourceTree = "<group>"; };
 		1EB7525A2C879CAF0034DA54 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
@@ -93,6 +95,7 @@
 			children = (
 				1E5B24682C822AB40009640E /* ContentView.swift */,
 				1EAE27942C91F785007E178F /* SliderView.swift */,
+				1EF1A0042F00000100A1B2C3 /* SettingsView.swift */,
 				1EAE27962C91F976007E178F /* AirInputView.swift */,
 				1EAE27982C9246B4007E178F /* InputBoardView.swift */,
 				1EEC05AA2C977581001DAA1D /* AboutView.swift */,
@@ -196,6 +199,7 @@
 				1E5B246E2C822AB40009640E /* ContentView.swift in Sources */,
 				1E5B246F2C822AB40009640E /* brokenithm_swiftuiApp.swift in Sources */,
 				1EAE27952C91F785007E178F /* SliderView.swift in Sources */,
+				1EF1A0052F00000100A1B2C3 /* SettingsView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

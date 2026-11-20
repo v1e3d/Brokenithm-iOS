@@ -12,13 +12,33 @@ struct ContentView: View {
     @State var connection: Listener? = nil
     @State var drawerOpen: Bool = false
     @State var sheetShowing: Bool = false
+    @State var settingsShowing: Bool = false
     @AppStorage("airOn") var airOn: Bool = false
-    @AppStorage("airHeightOption") var airHeightOption: String = "Normal"
+    // Layout and judging settings (edited in SettingsView)
+    @AppStorage("airHeightRatio") var airHeightRatio: Double = LayoutDefaults.airHeightRatio
+    @AppStorage("airGapRatio") var airGapRatio: Double = LayoutDefaults.airGapRatio
     /// Top/bottom split of every slider key, like the cabinet (16 x 2 sensors).
     @AppStorage("splitRows") var splitRows: Bool = true
+    @AppStorage("splitRatio") var splitRatio: Double = LayoutDefaults.splitRatio
     /// Touches near a key edge also press the neighbouring key.
     @AppStorage("edgeAssist") var edgeAssist: Bool = true
-    let airOptions: [String] = ["Small", "Normal", "Large"]
+    @AppStorage("edgeFraction") var edgeFraction: Double = LayoutDefaults.edgeFraction
+    @AppStorage("insetLeft") var insetLeft: Double = LayoutDefaults.insetLeft
+    @AppStorage("insetRight") var insetRight: Double = LayoutDefaults.insetRight
+    @AppStorage("showTouches") var showTouches: Bool = true
+    @AppStorage("showRowDivider") var showRowDivider: Bool = true
+    @AppStorage("ledBrightness") var ledBrightness: Double = LayoutDefaults.ledBrightness
+
+    private var sliderOptions: SliderMapping.Options {
+        var o = SliderMapping.Options()
+        o.splitRows = splitRows
+        o.splitRatio = splitRatio
+        o.edgeAssist = edgeAssist
+        o.edgeFraction = edgeFraction
+        o.insetLeft = insetLeft
+        o.insetRight = insetRight
+        return o
+    }
     
     var body: some View {
         ZStack {
@@ -38,17 +58,8 @@ struct ContentView: View {
                         Toggle(isOn: $airOn.animation(.bouncy(duration: 0.3, extraBounce: 0.2))) {
                             Text("Air Input")
                         }
-                        Picker("Air Height", selection: $airHeightOption.animation(.bouncy(duration: 0.3, extraBounce: 0.2))) {
-                            ForEach(airOptions, id: \.self) {
-                                Text($0)
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        Toggle(isOn: $splitRows) {
-                            Text("Split Keys Top/Bottom")
-                        }
-                        Toggle(isOn: $edgeAssist) {
-                            Text("Edge Assist")
+                        Button("Settings", systemImage: "slider.horizontal.3") {
+                            settingsShowing = true
                         }
                         Button("Restart Connection", systemImage: "arrow.clockwise") {
                             try? connection?.restart()
@@ -75,8 +86,11 @@ struct ContentView: View {
                     .foregroundStyle(.ultraThinMaterial)
                     .frame(height: 3)
                     .ignoresSafeArea()
-                InputBoardView(connection: $connection, airOn: $airOn, airOption: $airHeightOption,
-                               splitRows: splitRows, edgeAssist: edgeAssist)
+                InputBoardView(connection: $connection, airOn: $airOn,
+                               airHeightRatio: airHeightRatio, airGapRatio: airGapRatio,
+                               sliderOptions: sliderOptions,
+                               showTouches: showTouches, showRowDivider: showRowDivider,
+                               ledBrightness: ledBrightness)
             }
         }
         .ignoresSafeArea(edges: [.bottom])
@@ -95,6 +109,7 @@ struct ContentView: View {
             }
         }
         .sheet(isPresented: $sheetShowing, content: { AboutView(isPresented: $sheetShowing).presentationDragIndicator(.visible) })
+        .sheet(isPresented: $settingsShowing, content: { SettingsView(isPresented: $settingsShowing).presentationDragIndicator(.visible) })
         
     }
 }
